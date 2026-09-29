@@ -1,0 +1,21 @@
+{% if error %}<p class="error">{{ error }}</p>
+{% else %}
+<h3>{{ symbol }}</h3>
+<input type="hidden" name="provider" value="{{ provider }}">
+<input type="hidden" name="provider_symbol" value="{{ symbol }}">
+<label>Asset class
+  <select name="asset_class">
+    {% for c in asset_classes %}<option value="{{ c }}" {% if c == asset_class %}selected{% endif %}>{{ c }}</option>{% endfor %}
+  </select>
+</label>
+<label>Jesse symbol
+  <input name="jesse_symbol" value="{{ jesse_symbol }}" required pattern="[A-Z0-9]+-[A-Z0-9]+">
+  <small>Use this symbol with exchange "Custom Data" when importing into Jesse.</small>
+</label>
+<label>Start date
+  <input type="date" name="start_date" value="{{ earliest }}" min="{{ earliest }}" required
+         hx-get="/assets/estimate" hx-trigger="change" hx-target="#estimate" hx-include="[name=provider]">
+</label>
+<p id="estimate" class="muted">{{ estimate }}</p>
+<button type="submit">Add and start download</button>
+{% endif %}

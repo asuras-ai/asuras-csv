@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}OHLCV Downloader{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    table td, table th { white-space: nowrap; font-size: .9rem; vertical-align: top; }
+    .error { color: var(--pico-del-color); }
+    .muted { color: var(--pico-muted-color); font-size: .85rem; }
+    .actions form { display: inline; }
+    .actions button, .actions a[role=button] { padding: .2rem .5rem; font-size: .8rem; margin: 0 .1rem 0 0; }
+    .toolbar { display: flex; gap: .5rem; margin-bottom: 1rem; }
+    .toolbar form { margin: 0; }
+    progress { margin: 0; width: 8rem; }
+  </style>
+</head>
+<body>
+<main class="container-fluid">
+  <nav>
+    <ul><li><strong>OHLCV Downloader</strong></li></ul>
+    <ul>
+      <li><a href="/">Assets</a></li>
+      <li><a href="/jobs">Jobs</a></li>
+      <li><a href="/settings">Settings</a></li>
+    </ul>
+  </nav>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

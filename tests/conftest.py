@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -7,8 +8,11 @@ from sqlalchemy import text
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
+from app.config import EnvConfig
 from app.db import make_engine, make_session_factory
-from tests.fakes import FakeClock
+from app.main import create_app
+from app.providers.base import ProviderRegistry
+from tests.fakes import FakeClock, FakeProvider
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,3 +40,13 @@ async def sf(database_url):
         await conn.execute(text("TRUNCATE candles, jobs, assets, settings RESTART IDENTITY CASCADE"))
     yield make_session_factory(engine)
     await engine.dispose()
+
+
+@pytest.fixture
+async def client(sf, clock):
+    env = EnvConfig(
+        _env_file=None, database_url="postgresql+asyncpg://unused@localhost/unused", alpaca_key_id="", alpaca_secret_key=""
+    )
+    app = create_app(env, sf=sf, clock=clock, registry=ProviderRegistry([FakeProvider(clock)]), start_background=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        yield c

@@ -1,0 +1,12 @@
+{% macro job_status(job, progress) %}
+{% if job is none %}<span class="muted">idle</span>
+{% else %}
+  <strong>{{ job.status }}</strong>
+  {% if progress and job.status in ('queued', 'running', 'waiting', 'paused') %}
+    <br><progress value="{{ progress.percent }}" max="100"></progress> {{ progress.percent }}%
+    {% if progress.eta_seconds is not none %}· ~{{ progress.eta_seconds|duration }} left{% endif %}
+  {% endif %}
+  {% if job.status_detail %}<br><span class="muted">{{ job.status_detail }}</span>{% endif %}
+  {% if job.status == 'failed' and job.error %}<br><span class="error">{{ job.error }}</span>{% endif %}
+{% endif %}
+{% endmacro %}
