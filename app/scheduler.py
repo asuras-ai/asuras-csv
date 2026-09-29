@@ -28,18 +28,27 @@ class UpdateScheduler:
         self._scheduler.start()
 
     def shutdown(self) -> None:
-        self._scheduler.shutdown(wait=False)
+        if self._scheduler.running:
+            self._scheduler.shutdown(wait=False)
 
     def apply(self, settings: AppSettings) -> None:
+        # Build the trigger first - if cron is invalid, ValueError propagates before modifying state
+        if settings.schedule_enabled:
+            trigger = CronTrigger.from_crontab(settings.schedule_cron, timezone=UTC)
+
+        # Now it's safe to modify the job
         if self._scheduler.get_job(JOB_ID):
             self._scheduler.remove_job(JOB_ID)
+
         if settings.schedule_enabled:
             self._scheduler.add_job(
                 self.run_now,
-                CronTrigger.from_crontab(settings.schedule_cron, timezone=UTC),
+                trigger,
                 id=JOB_ID,
+                replace_existing=True,
                 max_instances=1,
                 coalesce=True,
+                misfire_grace_time=3600,
             )
 
     async def run_now(self) -> int:
@@ -49,4 +58,4 @@ class UpdateScheduler:
 
     def next_run(self) -> datetime | None:
         job = self._scheduler.get_job(JOB_ID)
-        return job.next_run_time if job else None
+        return getattr(job, "next_run_time", None) if job else None
