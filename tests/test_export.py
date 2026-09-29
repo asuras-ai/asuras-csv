@@ -56,3 +56,63 @@ def test_numbers_never_use_scientific_notation():
     assert format_row(T0, 0.00000812, 0.00000813, 0.00000815, 0.0000081, 12_000_000_000.0) == (
         "1704808800000,0.00000812,0.00000813,0.00000815,0.0000081,12000000000\n"
     )
+
+
+def test_tiny_prices_keep_their_digits():
+    assert format_row(T0, 3.55e-9, 1e-7, 1.5e-7, 3.55e-9, 1.0).split(",")[1:] == [
+        "0.00000000355", "0.0000001", "0.00000015", "0.00000000355", "1\n",
+    ]
+
+
+def test_negative_zero_is_never_emitted():
+    line = format_row(T0, -0.0, -0.0, 0.0, -0.0, -0.0)
+    assert line.split(",")[1:] == ["0", "0", "0", "0", "0\n"]
+    assert "-0" not in line
+
+
+async def test_export_range_uses_first_and_last_valid_candle(sf):
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [c(0, h=0.1), c(1), c(2), c(3, v=-1.0), c(4, o=float("nan"))])
+    rng = await export_range(sf, asset.id, None, None)
+    assert (rng.first, rng.last) == (T0 + timedelta(minutes=1), T0 + timedelta(minutes=2))
+
+
+async def test_export_range_rejects_infinity(sf):
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [c(0), c(1, h=float("inf")), c(2, l=float("-inf"))])
+    rng = await export_range(sf, asset.id, None, None)
+    assert (rng.first, rng.last) == (T0, T0)
+
+
+async def test_export_range_none_when_all_invalid(sf):
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [c(0, h=0.1), c(1, v=-1.0), c(2, o=float("nan"))])
+    assert await export_range(sf, asset.id, None, None) is None
+
+
+async def test_early_close_releases_session_quietly(sf, caplog):
+    import warnings
+
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [c(i) for i in range(5001 + 10)])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gen = stream_csv(sf, asset.id, None, None)
+        assert await anext(gen) == "timestamp,open,close,high,low,volume\n"
+        assert len(await anext(gen)) > 0
+        await gen.aclose()
+        import gc
+
+        gc.collect()
+    assert not caught
+    assert not [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+
+
+async def test_more_than_one_flush_is_complete_and_ordered(sf):
+    asset = await make_asset(sf)
+    n = 5001
+    await seed(sf, asset.id, [c(i) for i in reversed(range(n))])
+    lines = (await read(sf, asset.id)).splitlines()
+    stamps = [int(line.split(",")[0]) for line in lines[1:]]
+    assert len(stamps) == n
+    assert stamps == sorted(stamps) and len(set(stamps)) == n
