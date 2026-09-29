@@ -113,11 +113,11 @@ async def test_backfill_yields_after_its_slice(sf, clock):
     assert await candle_count(sf, asset.id) == 30
 
 
-async def test_update_jobs_are_not_sliced(sf, clock):
+async def test_update_jobs_are_sliced_too(sf, clock):
     registry = ProviderRegistry([FakeProvider(clock, seconds_per_chunk=25)])
     asset = await make_asset(sf)
     job = await start_job(sf, registry, clock, asset.id, "update")
-    assert await sync.run_slice(sf, registry, clock, job.id, slice_seconds=60) is SliceOutcome.DONE
+    assert await sync.run_slice(sf, registry, clock, job.id, slice_seconds=60) is SliceOutcome.YIELDED
 
 
 async def test_cancelled_job_stops_without_storing(sf, registry, clock):

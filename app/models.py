@@ -81,6 +81,7 @@ class Job(Base):
     last_progress_at: Mapped[datetime | None] = mapped_column(TS)
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TS, server_default=func.now())
+    queued_at: Mapped[datetime] = mapped_column(TS, server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(TS)
     finished_at: Mapped[datetime | None] = mapped_column(TS)
 

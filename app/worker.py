@@ -110,4 +110,4 @@ class Worker:
             if outcome is SliceOutcome.DONE:
                 await self._settle(jobs.finish, self._sf, self._clock, job_id, elapsed())
             elif outcome is SliceOutcome.YIELDED:
-                await self._settle(jobs.requeue, self._sf, job_id, elapsed())
+                await self._settle(jobs.requeue, self._sf, self._clock, job_id, elapsed())

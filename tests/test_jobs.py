@@ -95,7 +95,7 @@ async def test_finish_accumulates_run_time(sf, registry, clock):
     asset = await make_asset(sf)
     job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
     await jobs.claim_next(sf, clock)
-    assert await jobs.requeue(sf, job.id, 2.0)
+    assert await jobs.requeue(sf, clock, job.id, 2.0)
     await jobs.claim_next(sf, clock)
     assert await jobs.finish(sf, clock, job.id, 3.0)
     done = await jobs.get_job(sf, job.id)
@@ -225,3 +225,26 @@ async def test_pause_is_a_noop_unless_running(sf, registry, clock):
     await jobs.pause(sf, clock, job.id, "Fake: boom", 3.0)
     unchanged = await jobs.get_job(sf, job.id)
     assert (unchanged.status, unchanged.attempt, unchanged.run_seconds, unchanged.error) == ("queued", 0, 0.0, None)
+
+
+async def test_yielded_backfills_take_turns(sf, registry, clock):
+    a = await make_asset(sf, provider_symbol="A")
+    b = await make_asset(sf, provider_symbol="B")
+    job_a = await jobs.enqueue(sf, registry, clock, a.id, "backfill")
+    job_b = await jobs.enqueue(sf, registry, clock, b.id, "backfill")
+    assert await jobs.claim_next(sf, clock) == job_a.id
+    clock.advance(60)
+    assert await jobs.requeue(sf, clock, job_a.id, 60.0)
+    assert await jobs.claim_next(sf, clock) == job_b.id
+    clock.advance(60)
+    assert await jobs.requeue(sf, clock, job_b.id, 60.0)
+    assert await jobs.claim_next(sf, clock) == job_a.id
+
+
+async def test_a_long_queued_job_is_paused_not_failed_on_its_first_transient_error(sf, registry, clock):
+    asset = await make_asset(sf)
+    job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    clock.advance(25 * 3600)
+    assert await jobs.claim_next(sf, clock) == job.id
+    await jobs.pause(sf, clock, job.id, "Fake: boom", 0.0)
+    assert (await jobs.get_job(sf, job.id)).status == "paused"

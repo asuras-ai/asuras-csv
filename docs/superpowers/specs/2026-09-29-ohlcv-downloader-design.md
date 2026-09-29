@@ -68,7 +68,8 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 | status_detail | human-readable reason for `waiting`/`paused`, e.g. "Alpaca rate limit, resuming 14:03:12" |
 | next_attempt_at | when a `waiting`/`paused` job becomes eligible again |
 | attempt | consecutive failed attempts (reset after any successful chunk) |
-| last_progress_at | time of the last successful chunk (set at creation); drives the 24 h give-up rule |
+| last_progress_at | time of the last successful chunk; also reset whenever a job with `attempt = 0` is claimed, so the 24 h give-up rule counts from when the job last ran, not from queueing |
+| queued_at | when the job last entered the queue (set at creation and on every slice requeue); claim order is `priority DESC, queued_at, id` |
 | run_seconds | accumulated time spent running; used for the measured request rate |
 | error | last error message |
 | created_at, started_at, finished_at | |
@@ -165,7 +166,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 
 **6. Restarts resume.** On startup, jobs left `running` or `waiting` return to `queued` and continue from `fetched_until`. `paused` jobs keep their `next_attempt_at`. Stopping the container, rebooting the host or a crash just pauses downloads.
 
-**7. Fair scheduling.** A backfill job works in **slices**: after about 60 s of work it commits and returns itself to the queue. Workers always pick the highest-priority eligible job (`updates` before `backfills`, then oldest `created_at`). Short updates never wait behind a multi-hour Dukascopy backfill, and several backfills share the providers in round-robin.
+**7. Fair scheduling.** Every job (backfill or update) works in **slices**: after about 60 s of work it commits and returns itself to the queue with a fresh `queued_at`. Workers pick the highest-priority eligible job (`updates` before `backfills`), then the oldest `queued_at`. Short updates never wait behind a multi-hour Dukascopy backfill, and several jobs share the providers in round-robin.
 
 **8. Visibility.** Progress and ETA come from the cursor. ETA = `estimate_requests(fetched_until, range_end)` divided by the job's measured average rate (`requests_made / run_seconds`) once it has made 20 requests, and by the policy budget before that. The Add Asset form shows an estimate before saving, e.g. "≈ 2,600 requests, about 2 minutes" or "≈ 120,000 files, about 4 hours".
 
@@ -174,7 +175,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 - An in-process async worker pool with `worker_concurrency` workers (default 3). Workers take the highest-priority eligible job (`queued`, or `waiting`/`paused` with `next_attempt_at <= now`), using `SELECT ... FOR UPDATE SKIP LOCKED`.
 - At most one active (not `done`/`failed`/`cancelled`) job per asset. Requesting another returns the existing job. An active backfill already runs to `range_end`, and the next update continues from its cursor.
 - Retry, throttling, restart and slicing behaviour are specified in **Rate Limits and Long Downloads**.
-- Adding an asset queues a `backfill` job. Update buttons and scheduled runs queue `update` jobs. Both kinds run the same update logic and differ only in priority and slicing.
+- Adding an asset queues a `backfill` job. Update buttons and scheduled runs queue `update` jobs. Both kinds run the same update logic and differ only in priority.
 - The UI can cancel an active job. Stored candles and the cursor are kept, so a later update continues from there.
 
 ## Scheduler

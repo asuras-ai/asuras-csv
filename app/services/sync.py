@@ -20,7 +20,7 @@ INSERT_BATCH = 4000  # 7 params per row stays below PostgreSQL's 32767-parameter
 
 class SliceOutcome(StrEnum):
     DONE = "done"  # reached range_end
-    YIELDED = "yielded"  # backfill slice used up; requeue so other jobs get a turn
+    YIELDED = "yielded"  # slice used up; requeue so other jobs get a turn
     STOPPED = "stopped"  # job was cancelled or deleted
 
 
@@ -71,7 +71,7 @@ async def run_slice(
     job_id: int,
     slice_seconds: float = SLICE_SECONDS,
 ) -> SliceOutcome:
-    """Run one job until done (updates) or for about `slice_seconds` (backfills). Provider errors propagate."""
+    """Run one job until done or for about `slice_seconds`. Provider errors propagate."""
     async with sf() as s:
         job = await s.get(Job, job_id)
         asset = await s.get(Asset, job.asset_id) if job is not None else None
@@ -81,11 +81,11 @@ async def run_slice(
     start = asset.fetched_until or asset.start_date
     if start >= job.range_end:
         return SliceOutcome.DONE
-    deadline = clock.monotonic() + slice_seconds if job.kind == "backfill" else None
+    deadline = clock.monotonic() + slice_seconds
     async with aclosing(provider.fetch(asset.provider_symbol, start, job.range_end)) as chunks:
         async for chunk in chunks:
             if not await _commit_chunk(sf, clock, job.id, asset.id, chunk):
                 return SliceOutcome.STOPPED
-            if deadline is not None and clock.monotonic() >= deadline and chunk.covered_until < job.range_end:
+            if clock.monotonic() >= deadline and chunk.covered_until < job.range_end:
                 return SliceOutcome.YIELDED
     return SliceOutcome.DONE

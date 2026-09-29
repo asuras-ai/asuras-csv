@@ -45,6 +45,7 @@ async def enqueue(sf: SessionFactory, registry: ProviderRegistry, clock: Clock, 
                 range_start=start,
                 range_end=end,
                 last_progress_at=now,
+                queued_at=now,
                 finished_at=None if pending else now,
             )
             s.add(job)
@@ -75,7 +76,7 @@ async def claim_next(sf: SessionFactory, clock: Clock) -> int | None:
                     and_(Job.status.in_(("waiting", "paused")), Job.next_attempt_at <= now),
                 )
             )
-            .order_by(Job.priority.desc(), Job.id)
+            .order_by(Job.priority.desc(), Job.queued_at, Job.id)
             .limit(1)
             .with_for_update(skip_locked=True)
         )
@@ -85,6 +86,8 @@ async def claim_next(sf: SessionFactory, clock: Clock) -> int | None:
         job.started_at = job.started_at or now
         job.next_attempt_at = None
         job.status_detail = None
+        if job.attempt == 0:
+            job.last_progress_at = now  # the 24 h give-up counts from when the job last ran, not from queueing
         return job.id
 
 
@@ -104,8 +107,8 @@ async def finish(sf: SessionFactory, clock: Clock, job_id: int, elapsed: float) 
     )
 
 
-async def requeue(sf: SessionFactory, job_id: int, elapsed: float) -> bool:
-    return await _transition(sf, job_id, elapsed, status="queued")
+async def requeue(sf: SessionFactory, clock: Clock, job_id: int, elapsed: float) -> bool:
+    return await _transition(sf, job_id, elapsed, status="queued", queued_at=clock.now())
 
 
 async def wait(sf: SessionFactory, job_id: int, resume_at: datetime, detail: str, elapsed: float) -> bool:
