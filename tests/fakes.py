@@ -5,6 +5,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 from app.clock import Clock
+from app.db import SessionFactory
+from app.models import Asset
 
 
 class FakeClock(Clock):
@@ -30,3 +32,17 @@ class FakeClock(Clock):
         if seconds > 0:
             self.advance(seconds)
         await asyncio.sleep(0)
+
+
+async def make_asset(sf: SessionFactory, **overrides) -> Asset:
+    values = {
+        "provider": "fake",
+        "provider_symbol": "FAKEUSD",
+        "asset_class": "crypto",
+        "jesse_symbol": "FAKE-USD",
+        "start_date": datetime(2024, 1, 1, tzinfo=UTC),
+    } | overrides
+    asset = Asset(**values)
+    async with sf.begin() as s:
+        s.add(asset)
+    return asset
