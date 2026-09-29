@@ -60,25 +60,27 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-        if start_background:
-            recovered = await jobs.recover(sf)
-            if recovered:
-                log.info("re-queued %d interrupted jobs", recovered)
-            current = await settings.load()
-            services.worker = Worker(sf, registry, clock, current.worker_concurrency)
-            services.worker.start()
-            services.scheduler = UpdateScheduler(sf, registry, clock)
-            services.scheduler.apply(current)
-            services.scheduler.start()
-        yield
-        if services.scheduler:
-            services.scheduler.shutdown()
-        if services.worker:
-            await services.worker.stop()
-        if http:
-            await http.aclose()
-        if engine:
-            await engine.dispose()
+        try:
+            if start_background:
+                recovered = await jobs.recover(sf)
+                if recovered:
+                    log.info("re-queued %d interrupted jobs", recovered)
+                current = await settings.load()
+                services.worker = Worker(sf, registry, clock, current.worker_concurrency)
+                services.worker.start()
+                services.scheduler = UpdateScheduler(sf, registry, clock)
+                services.scheduler.apply(current)
+                services.scheduler.start()
+            yield
+        finally:
+            if services.scheduler is not None:
+                services.scheduler.shutdown()
+            if services.worker is not None:
+                await services.worker.stop()
+            if http is not None:
+                await http.aclose()
+            if engine is not None:
+                await engine.dispose()
 
     app = FastAPI(title="OHLCV Downloader", lifespan=lifespan)
     app.state.services = services

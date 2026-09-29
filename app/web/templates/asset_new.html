@@ -9,7 +9,7 @@
     </select>
   </label>
   <label>Search symbol
-    <input type="search" name="q" placeholder="e.g. BTCUSDT, AAPL, EURUSD" autocomplete="off"
+    <input type="search" name="q" placeholder="e.g. BTCUSDT, AAPL, EURUSD" autocomplete="off" hx-on:keydown="if(event.key==='Enter'){event.preventDefault()}"
            hx-get="/assets/search" hx-trigger="input changed delay:300ms, search"
            hx-target="#results" hx-include="[name=search_provider]">
   </label>

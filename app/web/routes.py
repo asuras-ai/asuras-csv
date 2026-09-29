@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
+from html import escape
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -108,10 +109,17 @@ async def new_asset_details(request: Request, provider: str, symbol: str, asset_
 
 
 @router.get("/assets/estimate", response_class=HTMLResponse)
-async def estimate(request: Request, provider: str, start_date: date):
+async def estimate(request: Request, provider: str, start_date: str = ""):
     svc = services(request)
-    p = svc.registry.get(provider)
-    return HTMLResponse(estimate_text(p, _start_of(start_date), p.available_until(svc.clock.now())))
+    try:
+        start = date.fromisoformat(start_date.strip())
+    except ValueError:
+        return HTMLResponse("")
+    try:
+        p = svc.registry.get(provider)
+        return HTMLResponse(estimate_text(p, _start_of(start), p.available_until(svc.clock.now())))
+    except ProviderError as exc:
+        return HTMLResponse(f'<span class="error">{escape(str(exc))}</span>')
 
 
 @router.post("/assets")
@@ -127,6 +135,14 @@ async def create(
     p = svc.registry.find(provider)
     if p is None or asset_class not in p.asset_classes:
         return _new_page(request, "Unknown provider or asset class.", 400)
+    if start_date > svc.clock.now().date():
+        return _new_page(request, "Start date cannot be in the future.", 400)
+    try:
+        earliest = (await p.earliest_available(provider_symbol)).date()
+    except ProviderError as exc:
+        return _new_page(request, str(exc), 400)
+    if start_date < earliest:
+        return _new_page(request, f"Start date is before the earliest available data ({earliest.isoformat()}).", 400)
     try:
         asset = await asset_service.create_asset(
             svc.sf,
@@ -153,5 +169,7 @@ async def update_all(request: Request):
 @router.post("/assets/{asset_id}/update")
 async def update_one(request: Request, asset_id: int):
     svc = services(request)
+    if await asset_service.get_asset(svc.sf, asset_id) is None:
+        raise HTTPException(404, "Asset not found")
     await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
     return redirect("/")
