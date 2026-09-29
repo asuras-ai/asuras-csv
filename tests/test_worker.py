@@ -78,3 +78,66 @@ async def test_worker_runs_queued_jobs_in_the_background(sf):
     finally:
         await worker.stop()
     assert (await jobs.get_job(sf, job.id)).status == "done"
+
+
+async def test_transition_failure_is_retried_until_the_job_settles(sf, clock, monkeypatch):
+    registry = ProviderRegistry([FakeProvider(clock)])
+    asset = await make_asset(sf)
+    await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    real_finish, calls = jobs.finish, []
+
+    async def flaky_finish(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            raise ConnectionError("db down")
+        return await real_finish(*args)
+
+    monkeypatch.setattr(jobs, "finish", flaky_finish)
+    job = await run_one(Worker(sf, registry, clock, poll_interval=1.0), sf, clock)
+    assert job.status == "done"
+    assert len(calls) == 2
+    assert clock.sleeps == [1.0]
+
+
+async def test_rate_limited_does_not_count_as_an_attempt(sf, clock):
+    registry = ProviderRegistry([FakeProvider(clock, fail_after=0, error=RateLimited("Fake", RESUME))])
+    asset = await make_asset(sf)
+    await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    job = await run_one(Worker(sf, registry, clock), sf, clock)
+    assert (job.status, job.attempt) == ("waiting", 0)
+
+
+async def test_resize_adds_and_removes_workers(sf):
+    worker = Worker(sf, ProviderRegistry([FakeProvider()]), Clock(), concurrency=1, poll_interval=0.01)
+    worker.start()
+    try:
+        worker.resize(3)
+        assert len(worker._slots) == 3
+        assert not any(t.done() for t in worker._slots.values())
+        worker.resize(1)
+        await asyncio.sleep(0.2)
+        assert [i for i, t in worker._slots.items() if not t.done()] == [0]
+    finally:
+        await worker.stop()
+
+
+async def test_stop_mid_job_leaves_it_running_for_recovery(sf, clock):
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class Blocking(FakeProvider):
+        async def fetch(self, symbol, start, end):
+            started.set()
+            await release.wait()
+            async for chunk in super().fetch(symbol, start, end):
+                yield chunk
+
+    registry = ProviderRegistry([Blocking(clock)])
+    asset = await make_asset(sf)
+    job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    worker = Worker(sf, registry, clock, poll_interval=0.01)
+    worker.start()
+    await asyncio.wait_for(started.wait(), 5)
+    await worker.stop()
+    assert (await jobs.get_job(sf, job.id)).status == "running"
+    assert await jobs.recover(sf) == 1
+    assert (await jobs.get_job(sf, job.id)).status == "queued"

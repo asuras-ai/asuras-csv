@@ -3,8 +3,8 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select, update
 
-from app.domain import TransientError
-from app.models import Asset, CandleRow
+from app.domain import Chunk, TransientError
+from app.models import Asset, CandleRow, Job
 from app.providers.base import ProviderRegistry
 from app.services import jobs, sync
 from app.services.sync import SliceOutcome
@@ -126,3 +126,42 @@ async def test_cancelled_job_stops_without_storing(sf, registry, clock):
     await jobs.cancel(sf, clock, job.id)
     assert await sync.run_slice(sf, registry, clock, job.id) is SliceOutcome.STOPPED
     assert await candle_count(sf, asset.id) == 0
+
+
+async def test_successful_chunk_resets_the_attempt_counter(sf, registry, clock):
+    asset = await make_asset(sf)
+    job = await start_job(sf, registry, clock, asset.id)
+    await jobs.pause(sf, clock, job.id, "boom", 0.0)
+    assert (await jobs.get_job(sf, job.id)).attempt == 1
+    clock.advance(3600)  # past the first backoff
+    assert await jobs.claim_next(sf, clock) == job.id
+    assert await sync.run_slice(sf, registry, clock, job.id) is SliceOutcome.DONE
+    assert (await jobs.get_job(sf, job.id)).attempt == 0
+
+
+async def test_cursor_never_moves_backwards(sf, registry, clock):
+    asset = await make_asset(sf)
+    job = await start_job(sf, registry, clock, asset.id)
+    await sync.run_slice(sf, registry, clock, job.id)
+    before = await cursor(sf, asset.id)
+    stale = Chunk([], before - timedelta(minutes=30))
+    async with sf.begin() as s:
+        await s.execute(update(Job).where(Job.id == job.id).values(status="running"))
+    assert await sync._commit_chunk(sf, clock, job.id, asset.id, stale) is True
+    assert await cursor(sf, asset.id) == before
+
+
+async def test_cancel_during_a_run_keeps_committed_chunks_and_stops(sf, clock):
+    class CancelAfterFirst(FakeProvider):
+        async def fetch(self, symbol, start, end):
+            async for chunk in super().fetch(symbol, start, end):
+                yield chunk
+                await jobs.cancel(sf, clock, job.id)
+
+    registry = ProviderRegistry([CancelAfterFirst(clock)])
+    asset = await make_asset(sf)
+    job = await start_job(sf, registry, clock, asset.id)
+    assert await sync.run_slice(sf, registry, clock, job.id) is SliceOutcome.STOPPED
+    assert await candle_count(sf, asset.id) == 10
+    assert await cursor(sf, asset.id) == asset.start_date + timedelta(minutes=10)
+    assert (await jobs.get_job(sf, job.id)).status == "cancelled"

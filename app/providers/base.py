@@ -1,7 +1,7 @@
 """Provider interface and registry. Adding a provider = one module + one line in main.build_registry."""
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 from datetime import datetime
 from typing import Protocol
 
@@ -25,7 +25,7 @@ class Provider(Protocol):
 
     def estimate_requests(self, start: datetime, end: datetime) -> int: ...
 
-    def fetch(self, symbol: str, start: datetime, end: datetime) -> AsyncIterator[Chunk]:
+    def fetch(self, symbol: str, start: datetime, end: datetime) -> AsyncGenerator[Chunk, None]:
         """Yield ascending chunks covering [start, end); one chunk per request or file."""
         ...
 

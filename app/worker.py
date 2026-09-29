@@ -73,6 +73,20 @@ class Worker:
                 log.exception("worker %d: unexpected error", index)
                 await self._clock.sleep(self._poll_interval)
 
+    async def _settle(self, transition, *args) -> None:
+        """Retry a job transition until it succeeds, so a DB outage never leaves the job stuck 'running'."""
+        delay = self._poll_interval
+        while True:
+            try:
+                await transition(*args)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("job transition %s failed; retrying in %.1fs", transition.__name__, delay)
+                await self._clock.sleep(delay)
+                delay = min(delay * 2, 60.0)
+
     async def run_job(self, job_id: int) -> None:
         began = self._clock.monotonic()
 
@@ -82,18 +96,18 @@ class Worker:
         try:
             outcome = await sync.run_slice(self._sf, self._registry, self._clock, job_id, self._slice_seconds)
         except RateLimited as exc:
-            await jobs.wait(self._sf, job_id, exc.resume_at, str(exc), elapsed())
+            await self._settle(jobs.wait, self._sf, job_id, exc.resume_at, str(exc), elapsed())
         except PermanentError as exc:
             log.warning("job %d failed: %s", job_id, exc)
-            await jobs.fail(self._sf, self._clock, job_id, str(exc), elapsed())
+            await self._settle(jobs.fail, self._sf, self._clock, job_id, str(exc), elapsed())
         except TransientError as exc:
             log.warning("job %d paused: %s", job_id, exc)
-            await jobs.pause(self._sf, self._clock, job_id, str(exc), elapsed())
+            await self._settle(jobs.pause, self._sf, self._clock, job_id, str(exc), elapsed())
         except Exception as exc:
             log.exception("job %d: unexpected error", job_id)
-            await jobs.pause(self._sf, self._clock, job_id, f"Unexpected error: {exc!r}", elapsed())
+            await self._settle(jobs.pause, self._sf, self._clock, job_id, f"Unexpected error: {exc!r}", elapsed())
         else:
             if outcome is SliceOutcome.DONE:
-                await jobs.finish(self._sf, self._clock, job_id, elapsed())
+                await self._settle(jobs.finish, self._sf, self._clock, job_id, elapsed())
             elif outcome is SliceOutcome.YIELDED:
-                await jobs.requeue(self._sf, job_id, elapsed())
+                await self._settle(jobs.requeue, self._sf, job_id, elapsed())
