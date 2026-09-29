@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import IntegrityError
 
 from app.clock import Clock
@@ -22,6 +23,8 @@ async def _active_job(s, asset_id: int) -> Job | None:
 
 async def enqueue(sf: SessionFactory, registry: ProviderRegistry, clock: Clock, asset_id: int, kind: str) -> Job:
     """Create a job for the asset, or return its already active job."""
+    if kind not in PRIORITY:
+        raise ValueError(f"Unknown job kind {kind!r}")
     try:
         async with sf.begin() as s:
             existing = await _active_job(s, asset_id)
@@ -166,7 +169,7 @@ async def get_job(sf: SessionFactory, job_id: int) -> Job | None:
 
 async def latest_jobs_by_asset(sf: SessionFactory) -> dict[int, Job]:
     async with sf() as s:
-        rows = await s.scalars(select(Job).distinct(Job.asset_id).order_by(Job.asset_id, Job.id.desc()))
+        rows = await s.scalars(select(Job).ext(distinct_on(Job.asset_id)).order_by(Job.asset_id, Job.id.desc()))
         return {job.asset_id: job for job in rows}
 
 
@@ -175,4 +178,4 @@ async def list_recent(sf: SessionFactory, limit: int = 200) -> list[tuple[Job, A
         result = await s.execute(
             select(Job, Asset).join(Asset, Asset.id == Job.asset_id).order_by(Job.id.desc()).limit(limit)
         )
-        return list(result.tuples())
+        return [(job, asset) for job, asset in result]

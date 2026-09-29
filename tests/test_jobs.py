@@ -1,7 +1,10 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import func, select
 
+from app.models import ACTIVE_STATUSES, Job
 from app.providers.base import ProviderRegistry
 from app.services import jobs
 from tests.fakes import FakeProvider, make_asset
@@ -133,3 +136,92 @@ async def test_list_recent_joins_assets(sf, registry, clock):
     job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
     [(listed_job, listed_asset)] = await jobs.list_recent(sf)
     assert (listed_job.id, listed_asset.jesse_symbol) == (job.id, "FAKE-USD")
+
+
+async def test_concurrent_claims_get_different_jobs(sf, registry, clock):
+    a = await make_asset(sf, provider_symbol="A")
+    b = await make_asset(sf, provider_symbol="B")
+    ja = await jobs.enqueue(sf, registry, clock, a.id, "backfill")
+    jb = await jobs.enqueue(sf, registry, clock, b.id, "backfill")
+    claimed = await asyncio.gather(jobs.claim_next(sf, clock), jobs.claim_next(sf, clock))
+    assert sorted(claimed) == sorted([ja.id, jb.id])
+
+
+async def _active_count(sf, asset_id):
+    async with sf() as s:
+        return await s.scalar(
+            select(func.count()).select_from(Job).where(Job.asset_id == asset_id, Job.status.in_(ACTIVE_STATUSES))
+        )
+
+
+async def test_concurrent_enqueues_share_one_active_job(sf, registry, clock):
+    asset = await make_asset(sf)
+    first, second = await asyncio.gather(
+        jobs.enqueue(sf, registry, clock, asset.id, "backfill"),
+        jobs.enqueue(sf, registry, clock, asset.id, "backfill"),
+    )
+    assert first.id == second.id
+    assert await _active_count(sf, asset.id) == 1
+
+
+async def test_enqueue_recovers_from_integrity_error_race(sf, registry, clock, monkeypatch):
+    asset = await make_asset(sf)
+    existing = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    real = jobs._active_job
+    calls = []
+
+    async def blind_first_time(s, asset_id):
+        calls.append(asset_id)
+        return None if len(calls) == 1 else await real(s, asset_id)
+
+    monkeypatch.setattr(jobs, "_active_job", blind_first_time)
+    job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    assert len(calls) == 2  # the insert hit the unique index and the except branch re-read
+    assert job.id == existing.id
+    assert await _active_count(sf, asset.id) == 1
+
+
+async def test_enqueue_unknown_kind_raises_value_error(sf, registry, clock):
+    asset = await make_asset(sf)
+    with pytest.raises(ValueError, match="kind"):
+        await jobs.enqueue(sf, registry, clock, asset.id, "bogus")
+
+
+async def test_recover_leaves_paused_jobs_alone(sf, registry, clock):
+    asset = await make_asset(sf)
+    job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    await jobs.claim_next(sf, clock)
+    await jobs.pause(sf, clock, job.id, "Fake: boom", 0.0)
+    before = await jobs.get_job(sf, job.id)
+    assert await jobs.recover(sf) == 0
+    after = await jobs.get_job(sf, job.id)
+    assert (after.status, after.next_attempt_at) == ("paused", before.next_attempt_at)
+    assert after.next_attempt_at is not None
+
+
+async def test_cancel_works_on_active_states_but_not_done(sf, registry, clock):
+    a = await make_asset(sf, provider_symbol="A")
+    b = await make_asset(sf, provider_symbol="B")
+    c = await make_asset(sf, provider_symbol="C")
+    d = await make_asset(sf, provider_symbol="D")
+    queued = await jobs.enqueue(sf, registry, clock, a.id, "backfill")
+    waiting = await jobs.enqueue(sf, registry, clock, b.id, "backfill")
+    paused = await jobs.enqueue(sf, registry, clock, c.id, "backfill")
+    done = await jobs.enqueue(sf, registry, clock, d.id, "backfill")
+    async with sf.begin() as s:
+        (await s.get(Job, waiting.id)).status = "waiting"
+        (await s.get(Job, paused.id)).status = "paused"
+        (await s.get(Job, done.id)).status = "done"
+    for j in (queued, waiting, paused):
+        assert await jobs.cancel(sf, clock, j.id)
+        assert (await jobs.get_job(sf, j.id)).status == "cancelled"
+    assert not await jobs.cancel(sf, clock, done.id)
+    assert (await jobs.get_job(sf, done.id)).status == "done"
+
+
+async def test_pause_is_a_noop_unless_running(sf, registry, clock):
+    asset = await make_asset(sf)
+    job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    await jobs.pause(sf, clock, job.id, "Fake: boom", 3.0)
+    unchanged = await jobs.get_job(sf, job.id)
+    assert (unchanged.status, unchanged.attempt, unchanged.run_seconds, unchanged.error) == ("queued", 0, 0.0, None)
