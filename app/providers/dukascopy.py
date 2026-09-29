@@ -50,6 +50,8 @@ def decode_hour(raw: bytes, hour_start: datetime, divisor: float) -> list[Candle
         records = RECORD.iter_unpack(lzma.decompress(raw))
         buckets: dict[int, list[float]] = {}  # minute -> [open, high, low, close, ticks]
         for ms, _ask, bid, _ask_volume, _bid_volume in records:
+            if ms >= 3_600_000:
+                raise TransientError(f"Dukascopy: corrupt file for {hour_start:%Y-%m-%d %H}:00 (tick offset {ms} ms)")
             price = bid / divisor
             bucket = buckets.get(ms // 60_000)
             if bucket is None:

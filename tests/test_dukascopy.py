@@ -1,3 +1,4 @@
+import asyncio
 import lzma
 from datetime import UTC, datetime, timedelta
 
@@ -85,3 +86,122 @@ async def test_search_and_earliest(provider):
     assert await provider.earliest_available("EURUSD") == datetime(2004, 1, 1, tzinfo=UTC)
     with pytest.raises(PermanentError):
         await provider.earliest_available("XXXYYY")
+
+
+def test_tick_offset_past_the_hour_is_corrupt():
+    with pytest.raises(TransientError, match="corrupt"):
+        decode_hour(bi5([(1_000, 110000), (3_600_000, 110010)]), HOUR0, 100000.0)
+
+
+def _hour_path(hour: datetime) -> str:
+    return f"/datafeed/EURUSD/{hour.year}/{hour.month - 1:02d}/{hour.day:02d}/{hour.hour:02d}h_ticks.bi5"
+
+
+async def _spin_until(predicate) -> None:
+    for _ in range(200):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition never reached")
+
+
+async def test_out_of_order_completion_keeps_hour_order(respx_mock, provider):
+    second_arrived = asyncio.Event()
+    files = {
+        _hour_path(HOUR0): bi5([(0, 110000)]),
+        _hour_path(HOUR0 + HOUR): bi5([(0, 110100)]),
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == _hour_path(HOUR0):
+            await second_arrived.wait()
+        else:
+            second_arrived.set()
+        return httpx.Response(200, content=files[request.url.path])
+
+    respx_mock.get(host="duka.test").mock(side_effect=handler)
+    chunks = [c async for c in provider.fetch("EURUSD", HOUR0, HOUR0 + 2 * HOUR)]
+    assert [c.candles[0].ts for c in chunks] == [HOUR0, HOUR0 + HOUR]
+    assert [c.candles[0].close for c in chunks] == [1.1, 1.101]
+    assert [c.covered_until for c in chunks] == [HOUR0 + HOUR, HOUR0 + 2 * HOUR]
+
+
+async def test_failing_hour_cancels_the_rest(respx_mock, provider):
+    never = asyncio.Event()
+    cancelled: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == _hour_path(HOUR0):
+            return httpx.Response(200, content=b"not lzma at all")
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled.append(request.url.path)
+            raise
+        return httpx.Response(404)
+
+    respx_mock.get(host="duka.test").mock(side_effect=handler)
+    before = asyncio.all_tasks()
+    with pytest.raises(TransientError, match="corrupt"):
+        async for _ in provider.fetch("EURUSD", HOUR0, HOUR0 + 3 * HOUR):
+            pass
+    assert asyncio.all_tasks() - before == set()
+    assert not never.is_set()
+    for t in cancelled:
+        assert t in {_hour_path(HOUR0 + HOUR), _hour_path(HOUR0 + 2 * HOUR)}
+
+
+async def test_early_close_cancels_prefetched_downloads(respx_mock, provider):
+    never = asyncio.Event()
+    started: list[str] = []
+    cancelled: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == _hour_path(HOUR0):
+            return httpx.Response(200, content=bi5([(0, 110000)]))
+        started.append(request.url.path)
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled.append(request.url.path)
+            raise
+        return httpx.Response(404)
+
+    respx_mock.get(host="duka.test").mock(side_effect=handler)
+    before = asyncio.all_tasks()
+    agen = provider.fetch("EURUSD", HOUR0, HOUR0 + 3 * HOUR)
+    first = await agen.__anext__()
+    assert first.covered_until == HOUR0 + HOUR
+    await _spin_until(lambda: len(started) == 2)
+    await agen.aclose()
+    assert sorted(cancelled) == sorted(started)
+    assert asyncio.all_tasks() - before == set()
+
+
+async def test_start_and_end_clip_the_candles(respx_mock, provider):
+    respx_mock.get(host="duka.test").mock(
+        return_value=httpx.Response(200, content=bi5([(5 * 60_000, 110000), (40 * 60_000, 110200)]))
+    )
+    start = HOUR0 + timedelta(minutes=30)
+    end = HOUR0 + timedelta(hours=1)
+    chunks = [c async for c in provider.fetch("EURUSD", start, end)]
+    assert len(chunks) == 1
+    assert [c.ts for c in chunks[0].candles] == [HOUR0 + timedelta(minutes=40)]
+    assert chunks[0].covered_until == end
+
+
+async def test_start_and_end_clip_within_a_single_hour(respx_mock, provider):
+    respx_mock.get(host="duka.test").mock(
+        return_value=httpx.Response(200, content=bi5([(5 * 60_000, 110000), (40 * 60_000, 110200)]))
+    )
+    start = HOUR0 + timedelta(minutes=30)
+    end = HOUR0 + timedelta(minutes=50)
+    [chunk] = [c async for c in provider.fetch("EURUSD", start, end)]
+    assert [c.ts for c in chunk.candles] == [HOUR0 + timedelta(minutes=40)]
+    assert chunk.covered_until == end
+
+
+async def test_jpy_prices_are_scaled_through_fetch(respx_mock, provider):
+    respx_mock.get(host="duka.test").mock(return_value=httpx.Response(200, content=bi5([(0, 150123)])))
+    [chunk] = [c async for c in provider.fetch("USDJPY", HOUR0, HOUR0 + HOUR)]
+    assert chunk.candles[0].close == 150.123
