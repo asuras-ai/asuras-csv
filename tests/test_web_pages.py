@@ -1,6 +1,17 @@
 from datetime import UTC, datetime, timedelta
 
+import httpx
+import pytest
+
+from app.config import EnvConfig
+from sqlalchemy import func, select
+
 from app.domain import Candle
+from app.models import CandleRow
+from app.main import create_app
+from app.services.export import ExportRange
+from app.services.settings import SettingsService
+from app.web import routes
 from app.providers.base import ProviderRegistry
 from app.services import jobs
 from app.services.assets import get_asset
@@ -24,10 +35,15 @@ async def test_edit_asset(client, sf):
 
 async def test_delete_asset(client, sf):
     asset = await make_asset(sf)
+    async with sf.begin() as s:
+        await insert_candles(s, asset.id, [Candle(T0, 1, 2, 0.5, 1.5, 10)])
     r = await client.get(f"/assets/{asset.id}/delete")
     assert r.status_code == 200 and "FAKE-USD" in r.text
     assert (await client.post(f"/assets/{asset.id}/delete")).status_code == 303
     assert await get_asset(sf, asset.id) is None
+    async with sf() as s:
+        remaining = (await s.execute(select(func.count()).select_from(CandleRow).where(CandleRow.asset_id == asset.id))).scalar_one()
+    assert remaining == 0
 
 
 async def test_export_downloads_jesse_csv(client, sf):
@@ -69,20 +85,68 @@ async def test_settings_roundtrip(client):
     )
     assert r.status_code == 303
     page = (await client.get("/settings")).text
-    assert "0 */6 * * *" in page and "1234" in page and "s3cr3t-value" not in page
+    assert "0 */6 * * *" in page and "•••• 1234" in page and "s3cr3t-value" not in page
     r = await client.post("/settings", data={"schedule_cron": "bad", "worker_concurrency": "2"})
     assert r.status_code == 400 and 'class="error"' in r.text
 
 
-async def test_export_body_matches_filename_range(client, sf):
+@pytest.mark.parametrize("target", ["//evil.com", "/\\evil.com", "https://evil.com"])
+async def test_cancel_rejects_offsite_redirect(client, sf, clock, target):
+    asset = await make_asset(sf)
+    job = await jobs.enqueue(sf, ProviderRegistry([FakeProvider(clock)]), clock, asset.id, "backfill")
+    r = await client.post(f"/jobs/{job.id}/cancel", data={"next": target})
+    assert r.status_code == 303 and r.headers["location"] == "/jobs"
+
+
+async def test_export_body_bounded_by_range_not_raw_dates(client, sf, monkeypatch):
     asset = await make_asset(sf)
     async with sf.begin() as s:
         await insert_candles(s, asset.id, [Candle(T0 + timedelta(minutes=m), 1, 2, 0.5, 1.5, 10) for m in (0, 1)])
-    # a candle arriving after the range end must never leak into a body whose filename excludes it
-    late = T0 + timedelta(days=1, minutes=5)
+    newer = T0 + timedelta(days=3)
     async with sf.begin() as s:
-        await insert_candles(s, asset.id, [Candle(late, 1, 2, 0.5, 1.5, 10)])
-    r = await client.get(f"/assets/{asset.id}/export.csv", params={"start": "2024-01-01", "end": "2024-01-01"})
-    lines = r.text.splitlines()
+        await insert_candles(s, asset.id, [Candle(newer, 1, 2, 0.5, 1.5, 10)])
+
+    async def stale_range(sf_, asset_id, start, end):
+        return ExportRange(T0, T0 + timedelta(minutes=1))
+
+    monkeypatch.setattr(routes, "export_range", stale_range)
+    r = await client.get(f"/assets/{asset.id}/export.csv")  # no end date
     assert "2024-01-01_2024-01-01" in r.headers["content-disposition"]
-    assert len(lines) == 3 and int(lines[-1].split(",")[0]) == int((T0 + timedelta(minutes=1)).timestamp() * 1000)
+    stamps = [int(line.split(",")[0]) for line in r.text.splitlines()[1:]]
+    assert stamps[-1] == int((T0 + timedelta(minutes=1)).timestamp() * 1000)
+    assert int(newer.timestamp() * 1000) not in stamps
+
+
+@pytest.fixture
+async def env_client(sf, clock):
+    env = EnvConfig(
+        _env_file=None,
+        database_url="postgresql+asyncpg://unused@localhost/unused",
+        alpaca_key_id="ENVKEY1234",
+        alpaca_secret_key="ENVSECRET",
+    )
+    app = create_app(env, sf=sf, clock=clock, registry=ProviderRegistry([FakeProvider(clock)]), start_background=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        yield c, SettingsService(sf, env)
+
+
+async def test_env_keys_are_read_only(env_client):
+    c, settings = env_client
+    page = (await c.get("/settings")).text
+    assert "environment" in page and 'name="alpaca_key_id"' not in page
+    r = await c.post(
+        "/settings",
+        data={"schedule_cron": "0 * * * *", "worker_concurrency": "2", "alpaca_key_id": "OTHER", "alpaca_secret_key": "OTHER2"},
+    )
+    assert r.status_code == 303
+    loaded = await settings.load()
+    assert (loaded.alpaca_key_id, loaded.alpaca_secret_key) == ("ENVKEY1234", "ENVSECRET")
+
+
+async def test_blank_key_fields_keep_stored_values(client, sf):
+    base = {"schedule_cron": "0 * * * *", "worker_concurrency": "2"}
+    await client.post("/settings", data=base | {"alpaca_key_id": "KEYID1234", "alpaca_secret_key": "sec-1"})
+    r = await client.post("/settings", data=base | {"alpaca_key_id": "", "alpaca_secret_key": ""})
+    assert r.status_code == 303
+    svc = SettingsService(sf, EnvConfig(_env_file=None, database_url="postgresql+asyncpg://u@h/d", alpaca_key_id="", alpaca_secret_key=""))
+    assert await svc.alpaca_credentials() == ("KEYID1234", "sec-1")

@@ -277,7 +277,8 @@ async def jobs_page(request: Request):
 async def cancel_job(request: Request, job_id: int, next: Annotated[str, Form()] = "/jobs"):
     svc = services(request)
     await jobs.cancel(svc.sf, svc.clock, job_id)
-    return redirect(next if next.startswith("/") else "/jobs")
+    same_origin = next.startswith("/") and not next.startswith(("//", "/\\"))
+    return redirect(next if same_origin else "/jobs")
 
 
 CRON_PRESETS = [
