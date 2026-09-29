@@ -27,7 +27,7 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 - `db`: `timescale/timescaledb:latest-pg16`, named volume for data, `restart: unless-stopped`.
 - `app`: built from repo `Dockerfile`, exposes port 8000, depends on `db`, `restart: unless-stopped`. Runs Alembic migrations on startup, then serves uvicorn.
 
-`.env.example` provides `DATABASE_URL`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `TZ`.
+`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
 
 ## Data Model
 
@@ -68,6 +68,8 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 | status_detail | human-readable reason for `waiting`/`paused`, e.g. "Alpaca rate limit, resuming 14:03:12" |
 | next_attempt_at | when a `waiting`/`paused` job becomes eligible again |
 | attempt | consecutive failed attempts (reset after any successful chunk) |
+| last_progress_at | time of the last successful chunk (set at creation); drives the 24 h give-up rule |
+| run_seconds | accumulated time spent running; used for the measured request rate |
 | error | last error message |
 | created_at, started_at, finished_at | |
 
@@ -105,7 +107,8 @@ class Provider(Protocol):
 
 ### Alpaca (stocks, ETFs)
 - `GET /v2/stocks/{symbol}/bars?timeframe=1Min&feed=iex&limit=10000`, follows `next_page_token`. Requires a free API key.
-- **Regular session only:** keeps a bar only if its open time, converted to `America/New_York`, is in [09:30, 16:00). DST is handled through zoneinfo.
+- **Regular session only:** each fetch loads the Alpaca market calendar (`GET {trading}/v2/calendar`, one request) for the range and keeps a bar only if its open time is in [open, close) of its New York trading day. This handles DST, holidays and early closes (e.g. 13:00 half-days). Trading API base URL comes from `ALPACA_TRADING_URL` (default `https://paper-api.alpaca.markets`, which works with free paper-account keys).
+- Prices are requested unadjusted (`adjustment=raw`), so incremental updates never disagree with earlier stored candles after a split.
 - Symbol search from `/v2/assets` (cached), which gives the stock/ETF class. Jesse symbol = `SYMBOL-USD`.
 - Earliest available: 2016-01-01 (IEX feed history start). A request whose range starts before a symbol's first bar simply returns that first bar, so pre-listing years cost no extra requests.
 - Rate limit: 200 requests/min on the free plan. `X-RateLimit-Remaining` / `X-RateLimit-Reset` are read after every response.
@@ -119,7 +122,7 @@ class Provider(Protocol):
 - Missing or empty hour files (weekends, holidays) produce no candles.
 - No published rate limit. The app self-throttles to 4 in-flight downloads and 8 files/s, and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 10–15 min per year of history per pair).
 - Each hour file yields one `Chunk` with `covered_until` = end of that hour.
-- `available_until` = start of the current UTC hour (the current hour's file is not final).
+- `available_until` = start of the previous UTC hour. The current hour's file is not final, and the last finished hour is often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
 
 ## Update Logic
@@ -164,7 +167,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 
 **7. Fair scheduling.** A backfill job works in **slices**: after about 60 s of work it commits and returns itself to the queue. Workers always pick the highest-priority eligible job (`updates` before `backfills`, then oldest `created_at`). Short updates never wait behind a multi-hour Dukascopy backfill, and several backfills share the providers in round-robin.
 
-**8. Visibility.** Progress and ETA come from the cursor. ETA = `estimate_requests(fetched_until, range_end)` divided by the measured request rate over the last 5 minutes (falling back to the policy budget at the start). The Add Asset form shows an estimate before saving, e.g. "≈ 2,600 requests, about 2 minutes" or "≈ 120,000 files, about 4 hours".
+**8. Visibility.** Progress and ETA come from the cursor. ETA = `estimate_requests(fetched_until, range_end)` divided by the job's measured average rate (`requests_made / run_seconds`) once it has made 20 requests, and by the policy budget before that. The Add Asset form shows an estimate before saving, e.g. "≈ 2,600 requests, about 2 minutes" or "≈ 120,000 files, about 4 hours".
 
 ## Job Runner
 
