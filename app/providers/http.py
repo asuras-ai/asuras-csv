@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -40,9 +41,11 @@ class RateLimitPolicy:
 def _retry_after(response: httpx.Response) -> float | None:
     value = response.headers.get("Retry-After")
     try:
-        return float(value) if value is not None else None
+        seconds = float(value) if value is not None else None
     except ValueError:
         return None
+    # Non-finite, negative and zero values are unusable (zero would cause a tight retry loop).
+    return seconds if seconds is not None and math.isfinite(seconds) and seconds > 0 else None
 
 
 class ProviderClient:
@@ -109,11 +112,17 @@ class ProviderClient:
             await self._clock.sleep(wait)
 
     def _throttle(self, response: httpx.Response) -> RateLimited:
+        now = self._clock.now()
+        pause_active = self._paused_until is not None and self._paused_until > now
         delay = _retry_after(response)
-        if delay is None:
-            delay = self._throttle_seconds
-            self._throttle_seconds = min(self._throttle_seconds * 2, MAX_THROTTLE_SECONDS)
-        self._paused_until = self._clock.now() + timedelta(seconds=delay)
+        if delay is None and pause_active:
+            resume_at = self._paused_until  # same throttle event: keep the pause, don't escalate again
+        else:
+            if delay is None:
+                delay = self._throttle_seconds
+                self._throttle_seconds = min(self._throttle_seconds * 2, MAX_THROTTLE_SECONDS)
+            resume_at = now + timedelta(seconds=delay)
+        self._paused_until = max(self._paused_until, resume_at) if pause_active else resume_at
         log.warning("%s throttled us (HTTP %s); pausing until %s", self.policy.name, response.status_code, self._paused_until)
         return RateLimited(self.policy.name, self._paused_until)
 

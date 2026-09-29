@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import httpx
@@ -68,14 +69,17 @@ async def test_server_errors_are_retried_then_reported_as_transient(respx_mock, 
 
 
 async def test_server_error_then_success(respx_mock, clock):
-    respx_mock.get(URL).mock(side_effect=[httpx.Response(500), httpx.Response(200)])
+    route = respx_mock.get(URL).mock(side_effect=[httpx.Response(500), httpx.Response(200)])
     assert (await make_client(clock).get(URL)).status_code == 200
+    assert route.call_count == 2
 
 
 async def test_network_errors_are_transient(respx_mock, clock):
-    respx_mock.get(URL).mock(side_effect=httpx.ConnectError("boom"))
+    route = respx_mock.get(URL).mock(side_effect=httpx.ConnectError("boom"))
     with pytest.raises(TransientError, match="network error"):
         await make_client(clock).get(URL)
+    assert route.call_count == 4
+    assert clock.sleeps == [2.0, 4.0, 8.0]
 
 
 async def test_permanent_status_uses_policy_message(respx_mock, clock):
@@ -95,3 +99,82 @@ async def test_extra_ok_statuses_are_returned(respx_mock, clock):
     respx_mock.get(URL).mock(return_value=httpx.Response(404))
     client = make_client(clock, ok_statuses=frozenset({200, 404}))
     assert (await client.get(URL)).status_code == 404
+
+
+def both_in_flight_then(responses):
+    """Side effect that holds every request until two are in flight, then answers in order."""
+    arrived = 0
+    both = asyncio.Event()
+    queue = list(responses)
+
+    async def handler(request):
+        nonlocal arrived
+        arrived += 1
+        if arrived >= 2:
+            both.set()
+        await both.wait()
+        return queue.pop(0)
+
+    return handler
+
+
+async def test_concurrent_429s_share_one_backoff_step(respx_mock, clock):
+    respx_mock.get(URL).mock(side_effect=both_in_flight_then([httpx.Response(429)] * 2))
+    client = make_client(clock)
+    start = clock.now()
+    results = await asyncio.gather(client.get(URL), client.get(URL), return_exceptions=True)
+    assert all(isinstance(r, RateLimited) for r in results)
+    assert {r.resume_at for r in results} == {start + timedelta(seconds=60)}
+    clock.advance(60)
+    respx_mock.get(URL).mock(return_value=httpx.Response(429))
+    now = clock.now()
+    with pytest.raises(RateLimited) as exc:
+        await client.get(URL)
+    assert (exc.value.resume_at - now).total_seconds() == 120
+
+
+async def test_shorter_retry_after_does_not_shorten_pause(respx_mock, clock):
+    respx_mock.get(URL).mock(
+        side_effect=both_in_flight_then(
+            [httpx.Response(429, headers={"Retry-After": "300"}), httpx.Response(429, headers={"Retry-After": "10"})]
+        )
+    )
+    client = make_client(clock)
+    start = clock.now()
+    results = await asyncio.gather(client.get(URL), client.get(URL), return_exceptions=True)
+    assert all(isinstance(r, RateLimited) for r in results)
+    assert client._paused_until == start + timedelta(seconds=300)
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "nan", "inf"])
+async def test_unusable_retry_after_is_treated_as_absent(respx_mock, clock, value):
+    respx_mock.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": value}))
+    start = clock.now()
+    with pytest.raises(RateLimited) as exc:
+        await make_client(clock).get(URL)
+    assert exc.value.resume_at == start + timedelta(seconds=60)
+
+
+async def test_concurrency_limit_is_respected(respx_mock, clock):
+    in_flight = peak = calls = 0
+    release = asyncio.Event()
+
+    async def handler(request):
+        nonlocal in_flight, peak, calls
+        calls += 1
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await release.wait()
+        in_flight -= 1
+        return httpx.Response(200)
+
+    respx_mock.get(URL).mock(side_effect=handler)
+    client = make_client(clock, concurrency=1)
+    tasks = asyncio.gather(client.get(URL), client.get(URL))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert calls == 1
+    release.set()
+    await tasks
+    assert calls == 2
+    assert peak == 1
