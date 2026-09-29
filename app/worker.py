@@ -33,6 +33,7 @@ class Worker:
         self._slice_seconds = slice_seconds
         self._slots: dict[int, asyncio.Task] = {}
         self._running = False
+        self._claiming: set[int] = set()
 
     def start(self) -> None:
         self._running = True
@@ -48,8 +49,11 @@ class Worker:
         # Jobs interrupted here stay 'running' and are re-queued by jobs.recover() on the next start.
         self._running = False
         tasks = list(self._slots.values())
-        for task in tasks:
-            task.cancel()
+        for index, task in self._slots.items():
+            # Never cancel a task mid-claim: cancelling an in-flight asyncpg query tears the connection down
+            # and leaves an unretrieved ConnectionError future. Those tasks exit on their own once the claim returns.
+            if index not in self._claiming:
+                task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._slots.clear()
 
@@ -62,7 +66,13 @@ class Worker:
     async def _loop(self, index: int) -> None:
         while self._running and index < self._target:
             try:
-                job_id = await jobs.claim_next(self._sf, self._clock)
+                self._claiming.add(index)
+                try:
+                    job_id = await jobs.claim_next(self._sf, self._clock)
+                finally:
+                    self._claiming.discard(index)
+                if not self._running:
+                    return  # stopped during the claim; a claimed job stays 'running' for jobs.recover()
                 if job_id is None:
                     await self._clock.sleep(self._poll_interval)
                     continue

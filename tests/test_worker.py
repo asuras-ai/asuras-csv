@@ -141,3 +141,22 @@ async def test_stop_mid_job_leaves_it_running_for_recovery(sf, clock):
     assert (await jobs.get_job(sf, job.id)).status == "running"
     assert await jobs.recover(sf) == 1
     assert (await jobs.get_job(sf, job.id)).status == "queued"
+
+
+async def test_stop_does_not_cancel_a_claim_in_flight(sf, monkeypatch):
+    entered, cancelled = asyncio.Event(), []
+
+    async def slow_claim(*args):
+        entered.set()
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    monkeypatch.setattr(jobs, "claim_next", slow_claim)
+    worker = Worker(sf, ProviderRegistry([FakeProvider()]), Clock(), concurrency=1, poll_interval=0.01)
+    worker.start()
+    await asyncio.wait_for(entered.wait(), 5)
+    await worker.stop()
+    assert cancelled == []
