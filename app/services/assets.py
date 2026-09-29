@@ -60,15 +60,19 @@ async def update_asset(sf: SessionFactory, asset_id: int, *, jesse_symbol: str, 
         await s.execute(update(Asset).where(Asset.id == asset_id).values(jesse_symbol=symbol, enabled=enabled))
 
 
+async def _cancel_active_jobs(s, asset_id: int) -> None:
+    await s.execute(
+        update(Job)
+        .where(Job.asset_id == asset_id, Job.status.in_(ACTIVE_STATUSES))
+        .values(status="cancelled", finished_at=func.now(), next_attempt_at=None, status_detail=None)
+    )
+
+
 async def delete_asset(sf: SessionFactory, asset_id: int) -> None:
     # Cancel active jobs first to avoid lock-order deadlock:
     # Sync locks job then touches asset via candle FK; delete locks asset then cascades to jobs.
     async with sf.begin() as s:
-        await s.execute(
-            update(Job)
-            .where(Job.asset_id == asset_id, Job.status.in_(ACTIVE_STATUSES))
-            .values(status="cancelled", finished_at=func.now(), next_attempt_at=None, status_detail=None)
-        )
+        await _cancel_active_jobs(s, asset_id)
     # Then delete candles and asset in a separate transaction
     async with sf.begin() as s:
         await s.execute(delete(CandleRow).where(CandleRow.asset_id == asset_id))
@@ -93,19 +97,26 @@ class StatsCache:
         self._ttl = ttl_seconds
         self._value: dict[int, AssetStats] | None = None
         self._loaded_at = 0.0
+        self._generation = 0
 
     def invalidate(self) -> None:
+        self._generation += 1
         self._value = None
 
     async def get(self, sf: SessionFactory) -> dict[int, AssetStats]:
         now = self._clock.monotonic() if self._clock else 0.0
         if self._value is None or self._clock is None or now - self._loaded_at > self._ttl:
+            generation = self._generation
             async with sf() as s:
                 rows = await s.execute(
                     select(CandleRow.asset_id, func.min(CandleRow.ts), func.max(CandleRow.ts), func.count()).group_by(
                         CandleRow.asset_id
                     )
                 )
-                self._value = {asset_id: AssetStats(first, last, count) for asset_id, first, last, count in rows}
+                value = {asset_id: AssetStats(first, last, count) for asset_id, first, last, count in rows}
+            if generation != self._generation:
+                return value  # invalidated mid-load: serve it once, but do not cache it as fresh
+            self._value = value
             self._loaded_at = now
+            return value
         return self._value

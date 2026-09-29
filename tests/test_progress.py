@@ -40,6 +40,34 @@ def test_cursor_before_range_counts_as_zero():
     assert job_progress(job(), None, FakeProvider()).percent == 0.0
 
 
+def test_zero_span_active_job_is_complete_with_zero_eta():
+    p = job_progress(job(range_end=T0), None, FakeProvider())
+    assert (p.percent, p.eta_seconds) == (100.0, 0.0)
+
+
+def test_cursor_past_range_end_is_complete_with_zero_eta():
+    p = job_progress(job(), T0 + timedelta(minutes=500), FakeProvider())
+    assert (p.percent, p.eta_seconds) == (100.0, 0.0)
+
+
+def test_tiny_run_seconds_falls_back_to_policy_rate():
+    p = job_progress(job(requests_made=40, run_seconds=0.0), T0 + timedelta(minutes=50), FakeProvider())
+    assert p.eta_seconds == pytest.approx(0.5)
+    p = job_progress(job(requests_made=40, run_seconds=0.5), T0 + timedelta(minutes=50), FakeProvider())
+    assert p.eta_seconds == pytest.approx(0.5)
+
+
+def test_non_positive_policy_rate_gives_no_eta():
+    provider = FakeProvider()
+    provider.client.policy.rate = 0
+    assert job_progress(job(), T0 + timedelta(minutes=50), provider).eta_seconds is None
+
+
+def test_paused_job_still_has_eta_and_failed_job_has_none():
+    assert job_progress(job(status="paused"), T0 + timedelta(minutes=50), FakeProvider()).eta_seconds == pytest.approx(0.5)
+    assert job_progress(job(status="failed"), T0 + timedelta(minutes=50), FakeProvider()).eta_seconds is None
+
+
 @pytest.mark.parametrize(
     ("seconds", "text"),
     [(30, "< 1 min"), (120, "2 min"), (3600, "1 h"), (7800, "2 h 10 min"), (100_000, "1 d 3 h"), (172_800, "2 d")],

@@ -8,6 +8,7 @@ from app.models import ACTIVE_STATUSES
 from app.providers.base import Provider
 
 MIN_REQUESTS_FOR_MEASURED_RATE = 20
+MIN_RUN_SECONDS_FOR_MEASURED_RATE = 1.0
 
 
 @dataclass(frozen=True)
@@ -24,12 +25,15 @@ def job_progress(job, fetched_until: datetime | None, provider: Provider) -> Job
     percent = 100.0 if span <= 0 else min(100.0, (cursor - job.range_start).total_seconds() / span * 100)
     eta = None
     if job.status in ACTIVE_STATUSES:
-        remaining = provider.estimate_requests(cursor, job.range_end)
-        if job.requests_made >= MIN_REQUESTS_FOR_MEASURED_RATE and job.run_seconds > 0:
-            rate = job.requests_made / job.run_seconds
+        if span <= 0:
+            eta = 0.0
         else:
-            rate = provider.client.policy.rate
-        eta = remaining / rate
+            remaining = provider.estimate_requests(cursor, job.range_end)
+            if job.requests_made >= MIN_REQUESTS_FOR_MEASURED_RATE and job.run_seconds >= MIN_RUN_SECONDS_FOR_MEASURED_RATE:
+                rate = job.requests_made / job.run_seconds
+            else:
+                rate = provider.client.policy.rate
+            eta = remaining / rate if rate > 0 else None
     return JobProgress(round(percent, 1), eta)
 
 
