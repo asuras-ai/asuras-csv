@@ -2,20 +2,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from app.domain import ProviderError
-from app.models import Asset, Job
+from app.models import ACTIVE_STATUSES, Asset, Job
 from app.services import assets as asset_service
 from app.services import jobs
 from app.services.assets import EMPTY_STATS, AssetStats
+from app.services.export import day_bounds, export_filename, export_range, stream_csv
 from app.services.progress import JobProgress, estimate_text, format_duration, job_progress
 
 router = APIRouter()
@@ -173,3 +174,170 @@ async def update_one(request: Request, asset_id: int):
         raise HTTPException(404, "Asset not found")
     await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
     return redirect("/")
+
+
+async def _asset_or_404(svc, asset_id: int) -> Asset:
+    asset = await asset_service.get_asset(svc.sf, asset_id)
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    return asset
+
+
+@router.get("/assets/{asset_id}/edit", response_class=HTMLResponse)
+async def edit_page(request: Request, asset_id: int):
+    asset = await _asset_or_404(services(request), asset_id)
+    return templates.TemplateResponse(request, "asset_edit.html", {"asset": asset, "error": None})
+
+
+@router.post("/assets/{asset_id}/edit")
+async def edit(
+    request: Request,
+    asset_id: int,
+    jesse_symbol: Annotated[str, Form()],
+    enabled: Annotated[str | None, Form()] = None,
+):
+    svc = services(request)
+    asset = await _asset_or_404(svc, asset_id)
+    try:
+        await asset_service.update_asset(svc.sf, asset_id, jesse_symbol=jesse_symbol, enabled=enabled is not None)
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "asset_edit.html", {"asset": asset, "error": str(exc)}, status_code=400)
+    return redirect("/")
+
+
+@router.get("/assets/{asset_id}/delete", response_class=HTMLResponse)
+async def delete_page(request: Request, asset_id: int):
+    svc = services(request)
+    asset = await _asset_or_404(svc, asset_id)
+    count = (await svc.stats.get(svc.sf)).get(asset_id, EMPTY_STATS).count
+    return templates.TemplateResponse(request, "asset_delete.html", {"asset": asset, "count": count})
+
+
+@router.post("/assets/{asset_id}/delete")
+async def delete(request: Request, asset_id: int):
+    svc = services(request)
+    await _asset_or_404(svc, asset_id)
+    await asset_service.delete_asset(svc.sf, asset_id)
+    svc.stats.invalidate()
+    return redirect("/")
+
+
+@router.get("/assets/{asset_id}/export", response_class=HTMLResponse)
+async def export_page(request: Request, asset_id: int):
+    svc = services(request)
+    asset = await _asset_or_404(svc, asset_id)
+    rng = await export_range(svc.sf, asset_id, None, None)
+    return templates.TemplateResponse(request, "export.html", {"asset": asset, "rng": rng})
+
+
+def _parse_day(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(400, f"Invalid date: {value!r}") from None
+
+
+@router.get("/assets/{asset_id}/export.csv")
+async def export_csv(request: Request, asset_id: int, start: str | None = None, end: str | None = None):
+    svc = services(request)
+    asset = await _asset_or_404(svc, asset_id)
+    start_dt, end_dt = day_bounds(_parse_day(start), _parse_day(end))
+    rng = await export_range(svc.sf, asset_id, start_dt, end_dt)
+    if rng is None:
+        raise HTTPException(404, "No candles in this range")
+    filename = export_filename(asset.jesse_symbol, rng)
+    return StreamingResponse(
+        stream_csv(svc.sf, asset_id, rng.first, rng.last + timedelta(minutes=1)),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@dataclass(frozen=True)
+class JobRow:
+    job: Job
+    asset: Asset
+    progress: JobProgress | None
+
+
+@router.get("/jobs", response_class=HTMLResponse)
+async def jobs_page(request: Request):
+    svc = services(request)
+    rows = []
+    for job, asset in await jobs.list_recent(svc.sf):
+        provider = svc.registry.find(asset.provider)
+        progress = job_progress(job, asset.fetched_until, provider) if provider else None
+        rows.append(JobRow(job, asset, progress))
+    return templates.TemplateResponse(request, "jobs.html", {"rows": rows, "active_statuses": ACTIVE_STATUSES})
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(request: Request, job_id: int, next: Annotated[str, Form()] = "/jobs"):
+    svc = services(request)
+    await jobs.cancel(svc.sf, svc.clock, job_id)
+    return redirect(next if next.startswith("/") else "/jobs")
+
+
+CRON_PRESETS = [
+    ("0 * * * *", "hourly"),
+    ("0 */6 * * *", "every 6 hours"),
+    ("0 2 * * *", "daily at 02:00 UTC"),
+]
+
+
+def _key_hint(key_id: str) -> str:
+    return f"•••• {key_id[-4:]}" if key_id else "not set"
+
+
+async def _settings_page(request: Request, error: str | None = None, status_code: int = 200):
+    svc = services(request)
+    current = await svc.settings.load()
+    context = {
+        "s": current,
+        "error": error,
+        "saved": request.query_params.get("saved") == "1",
+        "presets": CRON_PRESETS,
+        "next_run": svc.scheduler.next_run() if svc.scheduler else None,
+        "key_hint": _key_hint(current.alpaca_key_id),
+    }
+    return templates.TemplateResponse(request, "settings.html", context, status_code=status_code)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return await _settings_page(request)
+
+
+@router.post("/settings")
+async def save_settings(
+    request: Request,
+    schedule_cron: Annotated[str, Form()],
+    worker_concurrency: Annotated[str, Form()],
+    schedule_enabled: Annotated[str | None, Form()] = None,
+    alpaca_key_id: Annotated[str, Form()] = "",
+    alpaca_secret_key: Annotated[str, Form()] = "",
+):
+    svc = services(request)
+    current = await svc.settings.load()
+    values = {
+        "schedule_enabled": "true" if schedule_enabled else "false",
+        "schedule_cron": schedule_cron.strip(),
+        "worker_concurrency": worker_concurrency.strip(),
+    }
+    if not current.alpaca_from_env:
+        if alpaca_key_id.strip():
+            values["alpaca_key_id"] = alpaca_key_id.strip()
+        if alpaca_secret_key.strip():
+            values["alpaca_secret_key"] = alpaca_secret_key.strip()
+    try:
+        await svc.settings.save(values)
+    except ValueError as exc:
+        return await _settings_page(request, str(exc), 400)
+    updated = await svc.settings.load()
+    if svc.worker:
+        svc.worker.resize(updated.worker_concurrency)
+    if svc.scheduler:
+        svc.scheduler.apply(updated)
+    return redirect("/settings?saved=1")

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Export {{ asset.jesse_symbol }}</h2>
+{% if rng is none %}
+<p>No candles stored yet.</p>
+{% else %}
+<p class="muted">Stored: {{ rng.first|dt }} → {{ rng.last|dt }} UTC.
+  In Jesse, import with exchange <strong>Custom Data</strong> and symbol <strong>{{ asset.jesse_symbol }}</strong>.</p>
+<form method="get" action="/assets/{{ asset.id }}/export.csv">
+  <div class="grid">
+    <label>From <input type="date" name="start" value="{{ rng.first.date().isoformat() }}"></label>
+    <label>To (inclusive) <input type="date" name="end" value="{{ rng.last.date().isoformat() }}"></label>
+  </div>
+  <button type="submit">Download CSV</button>
+</form>
+{% endif %}
+<p><a href="/">Back to assets</a></p>
+{% endblock %}
