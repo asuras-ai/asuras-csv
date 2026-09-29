@@ -19,6 +19,7 @@ from app.services.assets import StatsCache
 from app.services.settings import SettingsService
 from app.state import Services
 from app.web.routes import router
+from app.web.security import CrossSiteGuard
 from app.worker import Worker
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         try:
             if start_background:
                 recovered = await jobs.recover(sf)
@@ -84,5 +86,6 @@ def create_app(
 
     app = FastAPI(title="OHLCV Downloader", lifespan=lifespan)
     app.state.services = services
+    app.add_middleware(CrossSiteGuard)
     app.include_router(router)
     return app
