@@ -24,3 +24,15 @@ async def test_post_without_origin_headers_works(client):
 
 async def test_cross_site_get_is_not_blocked(client):
     assert (await client.get("/", headers={"Sec-Fetch-Site": "cross-site"})).status_code == 200
+
+
+async def test_same_origin_fetch_site_wins_over_rewritten_host(client):
+    r = await client.post(
+        "/settings", data=SETTINGS, headers={"Origin": "https://public.example", "Sec-Fetch-Site": "same-origin"}
+    )
+    assert r.status_code == 303
+
+
+async def test_same_site_post_is_rejected(client):
+    r = await client.post("/settings", data=SETTINGS, headers={"Sec-Fetch-Site": "same-site"})
+    assert r.status_code == 403

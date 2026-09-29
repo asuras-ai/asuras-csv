@@ -23,8 +23,8 @@ class CrossSiteGuard:
     def _is_cross_site(scope: Scope) -> bool:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
         if "sec-fetch-site" in headers:
-            if headers["sec-fetch-site"] == "cross-site":
-                return True
+            # Browsers set this reliably; trust it alone (Origin may differ from Host behind a proxy).
+            return headers["sec-fetch-site"] not in ("same-origin", "none")
         origin = headers.get("origin")
         if origin is not None:
             origin_host = origin.split("://", 1)[-1].rstrip("/")

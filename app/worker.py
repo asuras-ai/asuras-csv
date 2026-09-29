@@ -13,6 +13,8 @@ from app.services.sync import SLICE_SECONDS, SliceOutcome
 
 log = logging.getLogger(__name__)
 
+STOP_TIMEOUT = 5.0
+
 
 class Worker:
     def __init__(
@@ -53,6 +55,10 @@ class Worker:
             # Never cancel a task mid-claim: cancelling an in-flight asyncpg query tears the connection down
             # and leaves an unretrieved ConnectionError future. Those tasks exit on their own once the claim returns.
             if index not in self._claiming:
+                task.cancel()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=STOP_TIMEOUT)
+            for task in pending:
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._slots.clear()

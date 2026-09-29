@@ -160,3 +160,24 @@ async def test_stop_does_not_cancel_a_claim_in_flight(sf, monkeypatch):
     await asyncio.wait_for(entered.wait(), 5)
     await worker.stop()
     assert cancelled == []
+
+
+async def test_stop_is_bounded_when_a_claim_hangs(sf, monkeypatch):
+    import time
+
+    from app import worker as worker_mod
+
+    entered = asyncio.Event()
+
+    async def stuck_claim(*args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(jobs, "claim_next", stuck_claim)
+    monkeypatch.setattr(worker_mod, "STOP_TIMEOUT", 0.1, raising=False)
+    worker = Worker(sf, ProviderRegistry([FakeProvider()]), Clock(), concurrency=1, poll_interval=0.01)
+    worker.start()
+    await asyncio.wait_for(entered.wait(), 5)
+    t0 = time.monotonic()
+    await asyncio.wait_for(worker.stop(), 5)
+    assert time.monotonic() - t0 < 1
