@@ -29,6 +29,8 @@ PAIRS: dict[str, date] = {
     ]
 }
 
+PUBLISH_LAG = 2 * HOUR  # the last finished hours are often published late
+
 POLICY = RateLimitPolicy(
     name="Dukascopy",
     rate=8.0,
@@ -95,7 +97,7 @@ class DukascopyProvider:
         return datetime.combine(PAIRS[symbol], time(), UTC)
 
     def available_until(self, now: datetime) -> datetime:
-        return floor_hour(now) - HOUR
+        return floor_hour(now) - PUBLISH_LAG
 
     def estimate_requests(self, start: datetime, end: datetime) -> int:
         if end <= start:

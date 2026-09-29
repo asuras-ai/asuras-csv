@@ -121,3 +121,9 @@ def test_estimate_counts_calendar_plus_bar_pages(clock):
     provider = make_provider(clock)
     assert provider.estimate_requests(start, start + timedelta(days=365 * 8)) == 83
     assert provider.estimate_requests(start, start) == 0
+
+
+def test_available_until_lags_two_minutes(clock):
+    provider = make_provider(clock)
+    now = datetime(2024, 5, 1, 15, 30, 45, tzinfo=UTC)
+    assert provider.available_until(now) == datetime(2024, 5, 1, 15, 28, tzinfo=UTC)

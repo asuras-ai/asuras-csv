@@ -69,9 +69,9 @@ async def test_missing_hours_and_saturdays_still_advance_the_cursor(respx_mock, 
     assert route.call_count == 1  # Saturday hours are never requested
 
 
-def test_available_until_leaves_a_full_hour_for_publishing(provider):
+def test_available_until_leaves_two_hours_for_publishing(provider):
     now = datetime(2024, 1, 3, 12, 40, tzinfo=UTC)
-    assert provider.available_until(now) == datetime(2024, 1, 3, 11, tzinfo=UTC)
+    assert provider.available_until(now) == datetime(2024, 1, 3, 10, tzinfo=UTC)
 
 
 def test_estimate_skips_saturdays(provider):

@@ -89,7 +89,7 @@ class Provider(Protocol):
     asset_classes: set[str]
     async def search_symbols(self, query: str) -> list[SymbolInfo]
     async def earliest_available(self, symbol: str) -> datetime
-    def available_until(self, now: datetime) -> datetime   # latest safely-final minute
+    def available_until(self, now: datetime) -> datetime   # latest safely-final minute (includes each provider's publish lag)
     def estimate_requests(self, start: datetime, end: datetime) -> int
     async def fetch(self, symbol: str, start: datetime, end: datetime
                     ) -> AsyncIterator[Chunk]   # ascending chunks, one per request/file
@@ -104,7 +104,7 @@ class Provider(Protocol):
 - Symbol list from `/api/v3/exchangeInfo` (cached). Jesse symbol = `baseAsset-quoteAsset`.
 - Earliest available: first kline returned from `startTime=0`.
 - Rate limit: 6000 request weight/min per IP; a 1000-candle kline request costs weight 2. `X-MBX-USED-WEIGHT-1M` is read after every response. HTTP 429/418 carry `Retry-After`.
-- `available_until` = now floored to the minute.
+- `available_until` = now floored to the minute, minus a 2-minute publish lag (`PUBLISH_LAG`), so the cursor never passes unpublished data.
 
 ### Alpaca (stocks, ETFs)
 - `GET /v2/stocks/{symbol}/bars?timeframe=1Min&feed=iex&limit=10000`, follows `next_page_token`. Requires a free API key.
@@ -114,7 +114,7 @@ class Provider(Protocol):
 - Earliest available: 2016-01-01 (IEX feed history start). A request whose range starts before a symbol's first bar simply returns that first bar, so pre-listing years cost no extra requests.
 - Rate limit: 200 requests/min on the free plan. `X-RateLimit-Remaining` / `X-RateLimit-Reset` are read after every response.
 - `covered_until` = timestamp after the last bar of the page, or the request `end` once `next_page_token` is empty.
-- `available_until` = now floored to the minute.
+- `available_until` = now floored to the minute, minus a 2-minute publish lag (`PUBLISH_LAG`), so the cursor never passes unpublished data.
 - Note: the free IEX feed only covers IEX exchange trades, so volume is lower than consolidated volume and some thinly traded minutes have no bar. The feed is a single constant in the adapter, so it can be switched to `sip` if a paid plan is added later.
 
 ### Dukascopy (forex)
@@ -123,7 +123,7 @@ class Provider(Protocol):
 - Missing or empty hour files (weekends, holidays) produce no candles.
 - No published rate limit. The app self-throttles to 4 in-flight downloads and 8 files/s, and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 10–15 min per year of history per pair).
 - Each hour file yields one `Chunk` with `covered_until` = end of that hour.
-- `available_until` = start of the previous UTC hour. The current hour's file is not final, and the last finished hour is often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
+- `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
 
 ## Update Logic

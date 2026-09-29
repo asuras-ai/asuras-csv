@@ -30,6 +30,8 @@ def alpaca_quota_delay(response: httpx.Response, now: datetime) -> float:
     return max(0.0, int(reset) - now.timestamp())
 
 
+PUBLISH_LAG = 2 * MINUTE  # keep the cursor behind data that may not be published yet
+
 POLICY = RateLimitPolicy(
     name="Alpaca",
     rate=3.0,  # 180 requests/min, 90% of the free plan's 200/min
@@ -98,7 +100,7 @@ class AlpacaProvider:
         return IEX_START
 
     def available_until(self, now: datetime) -> datetime:
-        return floor_minute(now)
+        return floor_minute(now) - PUBLISH_LAG
 
     def estimate_requests(self, start: datetime, end: datetime) -> int:
         if end <= start:

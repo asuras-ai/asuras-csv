@@ -100,7 +100,7 @@ def test_estimate_and_available_until(provider):
     assert provider.estimate_requests(LISTED, LISTED + timedelta(minutes=2500)) == 3
     assert provider.estimate_requests(LISTED, LISTED) == 0
     now = datetime(2024, 5, 1, 12, 30, 45, tzinfo=UTC)
-    assert provider.available_until(now) == datetime(2024, 5, 1, 12, 30, tzinfo=UTC)
+    assert provider.available_until(now) == datetime(2024, 5, 1, 12, 28, tzinfo=UTC)
 
 
 def test_quota_delay_waits_for_the_next_minute_when_weight_is_high():

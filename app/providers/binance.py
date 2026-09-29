@@ -24,6 +24,8 @@ def binance_quota_delay(response: httpx.Response, now: datetime) -> float:
 
 
 # A 1000-candle kline request costs weight 2, so 25 req/s = 3000 weight/min (50% of the limit).
+PUBLISH_LAG = 2 * MINUTE  # keep the cursor behind data that may not be published yet
+
 POLICY = RateLimitPolicy(
     name="Binance",
     rate=25.0,
@@ -70,7 +72,7 @@ class BinanceProvider:
         return from_ms(rows[0][0])
 
     def available_until(self, now: datetime) -> datetime:
-        return floor_minute(now)
+        return floor_minute(now) - PUBLISH_LAG
 
     def estimate_requests(self, start: datetime, end: datetime) -> int:
         if end <= start:
