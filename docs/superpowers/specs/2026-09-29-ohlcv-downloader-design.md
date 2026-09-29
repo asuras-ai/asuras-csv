@@ -7,7 +7,7 @@
 
 A self-hosted tool, run with `docker compose`, with a web GUI to download 1-minute OHLCV candles for crypto, stocks, ETFs and forex into a database. Updates download only candles newer than the last stored one. Any asset can be exported as a CSV in the Jesse "Custom Data" format (https://docs.jesse.trade/docs/traditional-markets/importing-data#custom-data-csv).
 
-Single user, runs on a local machine or LAN, no authentication.
+Single user, runs on a local machine or LAN, no authentication. The app has no login, so a small middleware rejects state-changing requests (POST/PUT/PATCH/DELETE) that a browser marks `Sec-Fetch-Site: cross-site` or whose `Origin` host differs from `Host`; requests with neither header (curl, tests) pass. Keep it off the public internet.
 
 Free APIs have rate limits, and years of 1m history take thousands of requests. The user never has to manage this. They add an asset and walk away. The app splits the download into small requests, paces them to each provider's limits, waits out throttling, resumes after restarts or network outages, and shows progress with an ETA (see **Rate Limits and Long Downloads**).
 

@@ -16,9 +16,18 @@ cp .env.example .env   # optional
 docker compose up -d --build
 ```
 
-Open http://localhost:8000, click **Add asset**, search a symbol, choose a start date and save.
+Open http://localhost:8000 (or the port set by `APP_PORT`), click **Add asset**, search a symbol, choose a start date and save.
 The download runs in the background. You can close the browser, and restarts resume where they stopped.
 Enable scheduled updates under **Settings**.
+
+`POSTGRES_PASSWORD` only takes effect the first time the database volume is created. To change it later,
+change the password inside Postgres (`ALTER USER ohlcv PASSWORD '...'`) or recreate the volume
+(`docker compose down -v`, which deletes all stored candles).
+
+## Security
+
+The app has no authentication. Keep it on your LAN and do not expose it to the internet. It also rejects
+cross-site browser POST/PUT/PATCH/DELETE requests as a guard against forged requests from other web pages.
 
 ## Export to Jesse
 

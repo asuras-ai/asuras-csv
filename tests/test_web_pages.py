@@ -7,7 +7,7 @@ from app.config import EnvConfig
 from sqlalchemy import func, select
 
 from app.domain import Candle
-from app.models import CandleRow
+from app.models import CandleRow, Setting
 from app.main import create_app
 from app.services.export import ExportRange
 from app.services.settings import SettingsService
@@ -130,7 +130,7 @@ async def env_client(sf, clock):
         yield c, SettingsService(sf, env)
 
 
-async def test_env_keys_are_read_only(env_client):
+async def test_env_keys_are_read_only(env_client, sf):
     c, settings = env_client
     page = (await c.get("/settings")).text
     assert "environment" in page and 'name="alpaca_key_id"' not in page
@@ -141,6 +141,9 @@ async def test_env_keys_are_read_only(env_client):
     assert r.status_code == 303
     loaded = await settings.load()
     assert (loaded.alpaca_key_id, loaded.alpaca_secret_key) == ("ENVKEY1234", "ENVSECRET")
+    async with sf() as s:
+        stored = (await s.scalars(select(Setting.key).where(Setting.key.in_(["alpaca_key_id", "alpaca_secret_key"])))).all()
+    assert stored == []  # the posted values were never persisted
 
 
 async def test_blank_key_fields_keep_stored_values(client, sf):
