@@ -50,7 +50,7 @@ class RateLimited(ProviderError):
     """The provider throttled us; nothing may be sent to it before resume_at."""
 
     def __init__(self, provider: str, resume_at: datetime, *, since: datetime | None = None, status: int | None = None):
-        if since is None or resume_at - since < UNAVAILABLE_AFTER:
+        if since is None:
             message = f"{provider} rate limit, resuming {resume_at:%H:%M:%S} UTC"
         else:
             message = (
@@ -59,7 +59,7 @@ class RateLimited(ProviderError):
         super().__init__(message)
         self.provider = provider
         self.resume_at = resume_at
-        self.since = since  # start of the current run of throttling responses
+        self.since = since  # set only when refusals have lasted UNAVAILABLE_AFTER: the outage's start
         self.status = status
 
 

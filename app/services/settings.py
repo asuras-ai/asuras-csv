@@ -35,6 +35,7 @@ class AppSettings:
     oanda_api_token: str = ""
     oanda_environment: str = "practice"
     oanda_from_env: bool = False
+    oanda_environment_from_env: bool = False
 
 
 def _validate(values: Mapping[str, str]) -> None:
@@ -70,6 +71,7 @@ class SettingsService:
         v = DEFAULTS | stored
         from_env = bool(self._env.alpaca_key_id and self._env.alpaca_secret_key)
         oanda_from_env = bool(self._env.oanda_api_token)
+        env_environment = self._env.oanda_environment.strip().lower()
         return AppSettings(
             schedule_enabled=v["schedule_enabled"] == "true",
             schedule_cron=v["schedule_cron"],
@@ -78,8 +80,9 @@ class SettingsService:
             alpaca_secret_key=self._env.alpaca_secret_key if from_env else v["alpaca_secret_key"],
             alpaca_from_env=from_env,
             oanda_api_token=self._env.oanda_api_token if oanda_from_env else v["oanda_api_token"],
-            oanda_environment=self._env.oanda_environment if oanda_from_env else v["oanda_environment"],
+            oanda_environment=env_environment or v["oanda_environment"],  # an invalid env value is reported by the provider
             oanda_from_env=oanda_from_env,
+            oanda_environment_from_env=bool(env_environment),
         )
 
     async def save(self, values: Mapping[str, str]) -> None:

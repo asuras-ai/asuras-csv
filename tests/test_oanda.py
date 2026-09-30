@@ -37,7 +37,7 @@ async def collect(provider, start, end, symbol="EUR_USD"):
     return [c async for c in provider.fetch(symbol, start, end)]
 
 
-async def test_windows_of_5000_minutes_with_headers_and_no_count(respx_mock, clock):
+async def test_windows_of_4999_minutes_with_headers_and_no_count(respx_mock, clock):
     route = candles_route(respx_mock, [], [], [])
     end = T0 + timedelta(minutes=12_000)
     chunks = await collect(make_provider(clock), T0, end)
@@ -70,17 +70,13 @@ async def test_candles_outside_the_window_are_ignored(respx_mock, clock):
     assert [c.ts for c in chunk.candles] == [T0]
 
 
-async def test_incomplete_candle_stops_the_cursor_at_its_time(respx_mock, clock):
+async def test_incomplete_candle_stops_the_cursor_at_its_time_without_another_request(respx_mock, clock):
     t = [T0 + timedelta(minutes=i) for i in range(4)]
-    route = candles_route(
-        respx_mock,
-        [candle(t[0]), candle(t[1]), candle(t[2], complete=False), candle(t[3])],
-        [candle(t[2], complete=False)],  # the next window starts at the incomplete candle and stops there
-    )
+    route = candles_route(respx_mock, [candle(t[0]), candle(t[1]), candle(t[2], complete=False), candle(t[3])])
     chunks = await collect(make_provider(clock), T0, T0 + timedelta(minutes=10))
+    assert len(chunks) == 1 and route.call_count == 1
     assert [c.ts for c in chunks[0].candles] == t[:2]
-    assert [c.covered_until for c in chunks] == [t[2], t[2]]
-    assert route.calls[1].request.url.params["from"] == str(int(t[2].timestamp()))
+    assert chunks[0].covered_until == t[2]
 
 
 async def test_incomplete_first_candle_ends_the_fetch_instead_of_spinning(respx_mock, clock):
@@ -102,9 +98,19 @@ async def test_live_environment_uses_the_fxtrade_host(respx_mock, clock):
     await collect(make_provider(clock, environment="live"), T0, T0 + timedelta(minutes=5))
 
 
-async def test_unknown_environment_is_treated_as_practice(respx_mock, clock):
-    candles_route(respx_mock, [])
-    await collect(make_provider(clock, environment="whatever"), T0, T0 + timedelta(minutes=5))
+async def test_environment_is_normalised(respx_mock, clock):
+    candles_route(respx_mock, [], host="api-fxtrade.oanda.com")
+    await collect(make_provider(clock, environment=" Live "), T0, T0 + timedelta(minutes=5))
+
+
+@pytest.mark.parametrize("environment", ["whatever", ""])
+async def test_invalid_environment_is_a_permanent_error_without_a_request(respx_mock, clock, environment):
+    provider = make_provider(clock, environment=environment)
+    with pytest.raises(PermanentError, match="OANDA: OANDA_ENVIRONMENT must be 'practice' or 'live'"):
+        await collect(provider, T0, T0 + timedelta(minutes=5))
+    with pytest.raises(PermanentError, match="OANDA_ENVIRONMENT"):
+        await provider.search_symbols("eur")
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.parametrize("token", ["", "   "])
@@ -184,10 +190,15 @@ def test_estimate_requests_and_available_until(clock):
     assert p.estimate_requests(T0, T0) == 0
     assert p.estimate_requests(T0, T0 - timedelta(hours=1)) == 0
     assert p.estimate_requests(T0, T0 + timedelta(minutes=1)) == 1
-    assert p.estimate_requests(T0, T0 + timedelta(minutes=5000)) == 1
+    assert p.estimate_requests(T0, T0 + timedelta(minutes=PAGE)) == 1
+    assert p.estimate_requests(T0, T0 + timedelta(minutes=PAGE + 1)) == 2
     assert p.estimate_requests(T0, T0 + timedelta(minutes=12_000)) == 3
     now = datetime(2024, 1, 8, 12, 34, 56, tzinfo=UTC)
     assert p.available_until(now) == datetime(2024, 1, 8, 12, 34, tzinfo=UTC) - PUBLISH_LAG == datetime(2024, 1, 8, 12, 32, tzinfo=UTC)
+
+
+def test_page_stays_below_oandas_5000_candle_limit_even_if_to_is_inclusive():
+    assert PAGE == 4999
 
 
 def test_policy_and_identity(clock):
@@ -195,3 +206,49 @@ def test_policy_and_identity(clock):
     assert POLICY.throttle_statuses == {429}
     p = make_provider(clock)
     assert (p.name, p.label, p.asset_classes) == ("oanda", "OANDA (forex & CFDs)", ("forex", "metal", "cfd"))
+
+
+async def test_search_cache_is_keyed_by_token_and_environment(respx_mock, clock):
+    creds = ["TOKEN", "practice"]
+
+    async def credentials():
+        return creds[0], creds[1]
+
+    provider = OandaProvider(ProviderClient(POLICY, httpx.AsyncClient(), clock), credentials)
+    accounts, instruments = mock_accounts(respx_mock)
+    await provider.search_symbols("eur")
+    await provider.search_symbols("eur")
+    assert accounts.call_count == 1
+    creds[0] = "OTHER"
+    await provider.search_symbols("eur")
+    assert accounts.call_count == 2 and accounts.calls[1].request.headers["Authorization"] == "Bearer OTHER"
+    creds[1] = "live"
+    live_accounts = respx_mock.get(host="api-fxtrade.oanda.com", path="/v3/accounts").mock(
+        return_value=httpx.Response(200, json={"accounts": [{"id": ACCOUNT}]})
+    )
+    live_instruments = respx_mock.get(host="api-fxtrade.oanda.com", path=f"/v3/accounts/{ACCOUNT}/instruments").mock(
+        return_value=httpx.Response(200, json={"instruments": INSTRUMENTS})
+    )
+    await provider.search_symbols("eur")
+    assert live_accounts.call_count == 1 and live_instruments.call_count == 1
+
+
+@pytest.mark.parametrize("body", [{}, {"accounts": []}, {"accounts": [{"tags": []}]}, {"accounts": None}, []])
+async def test_search_without_accounts_is_a_clear_permanent_error(respx_mock, clock, body):
+    respx_mock.get(host=HOST, path="/v3/accounts").mock(return_value=httpx.Response(200, json=body))
+    with pytest.raises(PermanentError, match="OANDA: no accounts found for this token"):
+        await make_provider(clock).search_symbols("eur")
+
+
+@pytest.mark.parametrize("body", [{}, {"instruments": []}, {"instruments": None}, [], {"instruments": [{"type": "CFD"}]}])
+async def test_search_without_instruments_is_a_clear_permanent_error(respx_mock, clock, body):
+    respx_mock.get(host=HOST, path="/v3/accounts").mock(return_value=httpx.Response(200, json={"accounts": [{"id": ACCOUNT}]}))
+    respx_mock.get(host=HOST, path=f"/v3/accounts/{ACCOUNT}/instruments").mock(return_value=httpx.Response(200, json=body))
+    with pytest.raises(PermanentError, match="OANDA: no instruments found for this account"):
+        await make_provider(clock).search_symbols("eur")
+
+
+async def test_candle_response_without_candles_is_an_error_not_an_empty_window(respx_mock, clock):
+    respx_mock.get(host=HOST, path="/v3/instruments/EUR_USD/candles").mock(return_value=httpx.Response(200, json={}))
+    with pytest.raises(PermanentError, match="unexpected response"):
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))

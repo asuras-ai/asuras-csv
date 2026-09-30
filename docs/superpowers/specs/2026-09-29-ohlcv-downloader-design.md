@@ -35,9 +35,9 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 | column | type | notes |
 |---|---|---|
 | id | serial PK | |
-| provider | text | `binance` \| `alpaca` \| `dukascopy` |
+| provider | text | `binance` \| `alpaca` \| `dukascopy` \| `oanda` |
 | provider_symbol | text | e.g. `BTCUSDT`, `AAPL`, `EURUSD` |
-| asset_class | text | `crypto` \| `stock` \| `etf` \| `forex` |
+| asset_class | text | `crypto` \| `stock` \| `etf` \| `forex` \| `metal` \| `cfd` |
 | jesse_symbol | text | `BASE-QUOTE`, e.g. `BTC-USDT`, `AAPL-USD`, `EUR-USD`; auto-suggested, user-editable |
 | start_date | timestamptz | first candle to backfill from |
 | fetched_until | timestamptz null | exclusive end of the range already fetched from the provider (NULL = nothing fetched yet). Advances even when a window has no candles (weekends, holidays, pre-listing), so empty ranges are never requested twice |
@@ -77,7 +77,7 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 Progress is `(assets.fetched_until − range_start) / (range_end − range_start)`.
 
 ### `settings`
-Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`. Environment variables override DB values for the Alpaca keys and the OANDA token (the environment then comes from `OANDA_ENVIRONMENT` too).
+Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`. Environment variables override DB values for the Alpaca keys and the OANDA token ; `OANDA_ENVIRONMENT`, when non-empty, overrides `oanda_environment` independently of the token.
 
 ## Providers
 
@@ -121,18 +121,18 @@ class Provider(Protocol):
 - Free hourly tick files: `https://datafeed.dukascopy.com/datafeed/{PAIR}/{YYYY}/{MM-1:02d}/{DD:02d}/{HH:02d}h_ticks.bi5` (LZMA-compressed; 20-byte big-endian records: ms offset, ask, bid, ask vol, bid vol; prices scaled by point size, 1e5 or 1e3 for JPY pairs).
 - Aggregated into 1m **bid** candles. Volume = tick count in the minute.
 - Missing or empty hour files (weekends, holidays) produce no candles.
-- No published rate limit. The app self-throttles to 2 in-flight downloads and 2 files/s (kept low because Dukascopy blocks fast clients), and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 45–60 min per year of history per pair).
+- No published rate limit. The app self-throttles to 2 in-flight downloads and 2 files/s (kept low because Dukascopy blocks fast clients), and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 1 hour or more per year (about 7,500 files a year at 2/s) of history per pair).
 - Each hour file yields one `Chunk` with `covered_until` = end of that hour.
 - `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
 
 ### OANDA (forex, metals, CFDs)
-- OANDA v20 REST API. Hosts: practice `https://api-fxpractice.oanda.com` (free demo account), live `https://api-fxtrade.oanda.com`, chosen by `OANDA_ENVIRONMENT` (unknown values mean practice). Auth: `Authorization: Bearer <token>`; the token is created on the account's "Manage API Access" page and is required (missing token = permanent error before any request). Every request sends `Accept-Datetime-Format: UNIX`, so `from`/`to` are UNIX seconds and each candle `time` is a string like `"1476717360.000000000"`.
-- Candles: `GET /v3/instruments/{instrument}/candles?granularity=M1&price=B&from=..&to=..` (bid, consistent with Dukascopy). `count` is never sent together with `from`+`to`; a range may hold at most 5000 candles, so `fetch` walks windows `[cursor, min(cursor + 5000 min, end))`, one request and one `Chunk` each. Prices are strings; volume is tick volume.
-- A candle with `complete: false` is dropped along with everything after it, and `covered_until` is that candle's time. If that equals the cursor, the fetch stops so it cannot spin. Otherwise `covered_until` is the window end, so empty windows (weekends) still advance the cursor.
-- Symbols: `GET /v3/accounts`, then `GET /v3/accounts/{id}/instruments` of the first account, cached. Types CURRENCY, METAL, CFD map to classes forex, metal, cfd. Jesse symbol = name with `_` replaced by `-` (`EUR-USD`, `XAU-USD`, `US30-USD`). Search ignores `_`, `-` and `/`.
+- OANDA v20 REST API. Hosts: practice `https://api-fxpractice.oanda.com` (free demo account), live `https://api-fxtrade.oanda.com`, chosen by `OANDA_ENVIRONMENT` (non-empty values win over the Settings page, even when the token comes from Settings; the value is trimmed and lower-cased, and anything other than `practice`/`live` makes the provider fail with "OANDA_ENVIRONMENT must be 'practice' or 'live'"; unset means the Settings value, default practice). Auth: `Authorization: Bearer <token>`; the token is created on the account's "Manage API Access" page and is required (missing token = permanent error before any request). Every request sends `Accept-Datetime-Format: UNIX`, so `from`/`to` are UNIX seconds and each candle `time` is a string like `"1476717360.000000000"`.
+- Candles: `GET /v3/instruments/{instrument}/candles?granularity=M1&price=B&from=..&to=..` (bid, consistent with Dukascopy). `count` is never sent together with `from`+`to`; a range may hold at most 5000 candles, so `fetch` walks windows `[cursor, min(cursor + 4999 min, end))` (`PAGE = 4999`, so a window can never exceed 5000 candles even if `to` were inclusive), one request and one `Chunk` each. Prices are strings; volume is tick volume.
+- A candle with `complete: false` is dropped along with everything after it, and `covered_until` is that candle's time. After such a chunk the fetch stops without another request (the next run continues from `covered_until`), so it cannot spin. Otherwise `covered_until` is the window end, so empty windows (weekends) still advance the cursor.
+- Symbols: `GET /v3/accounts`, then `GET /v3/accounts/{id}/instruments` of the first account, cached per (token, environment). An empty or malformed accounts/instruments response is a permanent error ("no accounts found for this token", "no instruments found for this account"). Types CURRENCY, METAL, CFD map to classes forex, metal, cfd. Jesse symbol = name with `_` replaced by `-` (`EUR-USD`, `XAU-USD`, `US30-USD`). Search ignores `_`, `-` and `/`.
 - `earliest_available`: one request from 2000-01-01 with `count=1`; the first candle's time.
-- `available_until` = current minute minus a 2-minute lag (`PUBLISH_LAG`). `estimate_requests` = ceil(minutes / 5000).
+- `available_until` = current minute minus a 2-minute lag (`PUBLISH_LAG`). `estimate_requests` = ceil(minutes / 4999).
 - Budget: OANDA allows 120 requests/s per IP and answers 429 beyond it. The app uses 20 req/s with 2 in flight. There are no quota headers. Errors 400/401/403/404 are permanent; 429 is throttling.
 
 ## Update Logic
@@ -155,7 +155,7 @@ Gaps inside the stored range are not filled (out of scope).
 
 Goal: a multi-year backfill runs unattended to completion, with the user only watching the progress bar.
 
-**1. Small requests.** Every fetch is broken into requests the provider can serve: 1000 candles for Binance, one 10,000-bar page for Alpaca, one hour file for Dukascopy. A large download is simply many small requests, each committed on its own.
+**1. Small requests.** Every fetch is broken into requests the provider can serve: 1000 candles for Binance, one 10,000-bar page for Alpaca, one hour file for Dukascopy, one window of at most 4999 one-minute candles for OANDA. A large download is simply many small requests, each committed on its own.
 
 **2. Pacing per provider.** Each provider has a `RateLimitPolicy` that the shared `ProviderClient` enforces for all jobs using that provider:
 
@@ -170,7 +170,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 
 **3. Throttling means waiting, not failing.** On HTTP 429/418 (or 503 from Dukascopy), the client pauses **all** requests to that provider until `Retry-After` (or 60 s if absent, doubling on repeats up to 15 min). Affected jobs show status `waiting` with a message like "Binance rate limit, resuming 14:03:12". This never counts toward the job's error attempts.
 
-**Honest status.** The client remembers when the current streak of throttling responses began (any non-throttled response ends it). If the streak has lasted 5 minutes or more, the message changes to "Dukascopy unavailable since 14:00 UTC (HTTP 503), retrying at 14:09:30 UTC" so a provider that refuses everything is not presented as merely rate limited. Jobs in `waiting` or `paused` show no ETA, since nothing is being downloaded.
+**Honest status.** The client remembers when the current streak of throttling responses began (any non-throttled response ends it, except a stale one that arrives while a pause is still active). If the refusals have lasted 5 minutes or more of elapsed time (measured from the first refusal to now, not from the projected resume time, so one long `Retry-After` alone never counts), the message changes to "Dukascopy unavailable since 14:00 UTC (HTTP 503), retrying at 14:09:30 UTC" so a provider that refuses everything is not presented as merely rate limited. Jobs in `waiting` or `paused` show no ETA, since nothing is being downloaded.
 
 **4. Transient errors retry automatically.** Network errors, timeouts and 5xx responses are retried 3 times within the request (backoff 2 s, 4 s, 8 s). If a request still fails, the job becomes `paused` and is re-queued with `next_attempt_at` after 1 min, 5 min, 15 min, 1 h, then hourly. After 24 h of consecutive failures without a successful chunk, the job becomes `failed`. Any successful chunk resets the counter. Candles already stored are always kept.
 

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from app.clock import Clock
-from app.domain import PermanentError, RateLimited, TransientError
+from app.domain import UNAVAILABLE_AFTER, PermanentError, RateLimited, TransientError
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +79,8 @@ class ProviderClient:
                 if status in self.policy.throttle_statuses:
                     raise self._throttle(response)
                 self._throttle_seconds = DEFAULT_THROTTLE_SECONDS
-                self._throttled_since = None
+                if not self._pause_active(self._clock.now()):  # a stale success must not end the streak
+                    self._throttled_since = None
                 self._apply_quota(response)
                 if status in self.policy.ok_statuses:
                     return response
@@ -99,10 +100,8 @@ class ProviderClient:
     async def _acquire(self) -> None:
         while True:
             async with self._lock:
-                if self._paused_until is not None and self._paused_until > self._clock.now():
-                    raise RateLimited(
-                        self.policy.name, self._paused_until, since=self._throttled_since, status=self._throttle_status
-                    )
+                if self._pause_active(self._clock.now()):
+                    raise self._rate_limited(self._clock.now())
                 now = self._clock.monotonic()
                 self._tokens = min(
                     float(self.policy.burst), self._tokens + (now - self._last_refill) * self.policy.rate
@@ -121,7 +120,7 @@ class ProviderClient:
         if self._throttled_since is None:
             self._throttled_since = now
         self._throttle_status = response.status_code
-        pause_active = self._paused_until is not None and self._paused_until > now
+        pause_active = self._pause_active(now)
         delay = _retry_after(response)
         if delay is None and pause_active:
             resume_at = self._paused_until  # same throttle event: keep the pause, don't escalate again
@@ -132,8 +131,17 @@ class ProviderClient:
             resume_at = now + timedelta(seconds=delay)
         self._paused_until = max(self._paused_until, resume_at) if pause_active else resume_at
         log.warning("%s throttled us (HTTP %s); pausing until %s", self.policy.name, response.status_code, self._paused_until)
+        return self._rate_limited(now)
+
+    def _pause_active(self, now: datetime) -> bool:
+        return self._paused_until is not None and self._paused_until > now
+
+    def _rate_limited(self, now: datetime) -> RateLimited:
+        """Report an outage (not just rate limiting) once refusals have lasted UNAVAILABLE_AFTER."""
+        since = self._throttled_since
+        outage = since is not None and now - since >= UNAVAILABLE_AFTER
         return RateLimited(
-            self.policy.name, self._paused_until, since=self._throttled_since, status=self._throttle_status
+            self.policy.name, self._paused_until, since=since if outage else None, status=self._throttle_status
         )
 
     def _apply_quota(self, response: httpx.Response) -> None:

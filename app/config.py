@@ -11,4 +11,4 @@ class EnvConfig(BaseSettings):
     alpaca_secret_key: str = ""
     alpaca_trading_url: str = "https://paper-api.alpaca.markets"
     oanda_api_token: str = ""
-    oanda_environment: str = "practice"
+    oanda_environment: str = ""  # unset: use the Settings page value (default practice)

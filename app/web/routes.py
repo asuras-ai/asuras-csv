@@ -335,9 +335,9 @@ async def save_settings(
             values["alpaca_key_id"] = alpaca_key_id.strip()
         if alpaca_secret_key.strip():
             values["alpaca_secret_key"] = alpaca_secret_key.strip()
-    if not current.oanda_from_env:
-        if oanda_api_token.strip():
-            values["oanda_api_token"] = oanda_api_token.strip()
+    if not current.oanda_from_env and oanda_api_token.strip():
+        values["oanda_api_token"] = oanda_api_token.strip()
+    if not current.oanda_environment_from_env:
         if oanda_environment.strip():
             values["oanda_environment"] = oanda_environment.strip()
     try:

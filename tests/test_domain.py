@@ -40,9 +40,8 @@ async def test_fake_clock_sleep_advances_time():
     assert clock.sleeps == [1.5]
 
 
-def test_rate_limited_message_stays_short_for_a_brief_streak():
-    since = datetime(2024, 1, 1, 14, 0, tzinfo=UTC)
-    err = RateLimited("Binance", datetime(2024, 1, 1, 14, 3, 12, tzinfo=UTC), since=since, status=429)
+def test_rate_limited_message_stays_short_without_an_outage_streak():
+    err = RateLimited("Binance", datetime(2024, 1, 1, 14, 3, 12, tzinfo=UTC), status=429)
     assert str(err) == "Binance rate limit, resuming 14:03:12 UTC"
 
 
