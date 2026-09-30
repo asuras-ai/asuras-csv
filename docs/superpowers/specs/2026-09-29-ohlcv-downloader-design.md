@@ -121,7 +121,7 @@ class Provider(Protocol):
 - Free hourly tick files: `https://datafeed.dukascopy.com/datafeed/{PAIR}/{YYYY}/{MM-1:02d}/{DD:02d}/{HH:02d}h_ticks.bi5` (LZMA-compressed; 20-byte big-endian records: ms offset, ask, bid, ask vol, bid vol; prices scaled by point size, 1e5 or 1e3 for JPY pairs).
 - Aggregated into 1m **bid** candles. Volume = tick count in the minute.
 - Missing or empty hour files (weekends, holidays) produce no candles.
-- No published rate limit. The app self-throttles to 4 in-flight downloads and 8 files/s, and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 10–15 min per year of history per pair).
+- No published rate limit. The app self-throttles to 2 in-flight downloads and 2 files/s (kept low because Dukascopy blocks fast clients), and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 45–60 min per year of history per pair).
 - Each hour file yields one `Chunk` with `covered_until` = end of that hour.
 - `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
@@ -154,7 +154,7 @@ Goal: a multi-year backfill runs unattended to completion, with the user only wa
 |---|---|---|
 | Binance | 3000 weight/min (50% of the 6000 limit, leaving room for other tools on the same IP) | 2 |
 | Alpaca | 180 req/min (90% of 200) | 1 |
-| Dukascopy | 8 files/s | 4 |
+| Dukascopy | 2 files/s | 2 |
 
 The client uses a token bucket for the budget. It also reads the provider's rate-limit headers after each response: when they report remaining quota near zero, it sleeps until the reported reset time instead of hitting the limit. Budgets are constants in each adapter.
 

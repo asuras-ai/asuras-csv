@@ -7,7 +7,7 @@ Self-hosted tool that downloads 1-minute OHLCV candles into TimescaleDB and expo
 |---|---|---|---|
 | Crypto | Binance | none | Full history. Binance blocks some regions (HTTP 451), e.g. US servers. |
 | US stocks & ETFs | Alpaca | free | IEX feed from 2016, regular session only (09:30–16:00 ET, early closes respected). IEX volume is lower than consolidated volume. Prices are unadjusted. |
-| Forex | Dukascopy | none | Bid prices; volume = tick count. Slowest source (~10–15 min per year per pair). |
+| Forex | Dukascopy | none | Bid prices; volume = tick count. Slowest source (~45–60 min per year per pair). |
 
 ## Run
 
