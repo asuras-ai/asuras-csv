@@ -16,6 +16,7 @@ from app.domain import UNAVAILABLE_AFTER, PermanentError, RateLimited, Transient
 log = logging.getLogger(__name__)
 
 QuotaDelay = Callable[[httpx.Response, datetime], float]
+ThrottleDelay = Callable[[httpx.Response, datetime], float | None]
 
 RETRY_DELAYS = (2.0, 4.0, 8.0)
 DEFAULT_THROTTLE_SECONDS = 60.0
@@ -24,6 +25,10 @@ MAX_THROTTLE_SECONDS = 900.0
 
 def no_quota_delay(response: httpx.Response, now: datetime) -> float:
     return 0.0
+
+
+def no_throttle_delay(response: httpx.Response, now: datetime) -> float | None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class RateLimitPolicy:
     throttle_statuses: frozenset[int] = frozenset({429})
     permanent_messages: Mapping[int, str] = field(default_factory=dict)
     quota_delay: QuotaDelay = no_quota_delay
+    throttle_delay: ThrottleDelay = no_throttle_delay  # provider-specific pause in seconds for a throttling response; None = use Retry-After / backoff
 
 
 def _retry_after(response: httpx.Response) -> float | None:
@@ -115,14 +121,20 @@ class ProviderClient:
                     wait = (1 - self._tokens) / self.policy.rate
             await self._clock.sleep(wait)
 
-    def _throttle(self, response: httpx.Response) -> RateLimited:
+    def throttled(self, response: httpx.Response, status: int | None = None) -> RateLimited:
+        """Record a throttling response that the adapter detected itself (e.g. an error in a 200 body)."""
+        return self._throttle(response, status)
+
+    def _throttle(self, response: httpx.Response, status: int | None = None) -> RateLimited:
         now = self._clock.now()
         idle = self._paused_until is not None and now - self._paused_until > timedelta(seconds=DEFAULT_THROTTLE_SECONDS)
         if self._throttled_since is None or idle:  # idle: nobody finished the old streak, so start a new one
             self._throttled_since = now
-        self._throttle_status = response.status_code
+        self._throttle_status = status if status is not None else response.status_code
         pause_active = self._pause_active(now)
-        delay = _retry_after(response)
+        delay = self.policy.throttle_delay(response, now)
+        if delay is None or not math.isfinite(delay) or delay <= 0:
+            delay = _retry_after(response)
         if delay is None and pause_active:
             resume_at = self._paused_until  # same throttle event: keep the pause, don't escalate again
         else:
@@ -131,7 +143,7 @@ class ProviderClient:
                 self._throttle_seconds = min(self._throttle_seconds * 2, MAX_THROTTLE_SECONDS)
             resume_at = now + timedelta(seconds=delay)
         self._paused_until = max(self._paused_until, resume_at) if pause_active else resume_at
-        log.warning("%s throttled us (HTTP %s); pausing until %s", self.policy.name, response.status_code, self._paused_until)
+        log.warning("%s throttled us (HTTP %s); pausing until %s", self.policy.name, self._throttle_status, self._paused_until)
         return self._rate_limited(now)
 
     def _pause_active(self, now: datetime) -> bool:

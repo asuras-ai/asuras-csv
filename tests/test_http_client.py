@@ -315,3 +315,49 @@ async def test_stale_success_during_a_pause_does_not_reset_the_backoff(clock):
     with pytest.raises(RateLimited) as again:
         await client.get(f"{URL}/fast")
     assert again.value.resume_at - clock.now() == timedelta(seconds=120)
+
+
+async def test_throttle_delay_hook_overrides_retry_after_and_backoff(respx_mock, clock):
+    respx_mock.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "30"}, json={"message": "soon"}))
+    seen = []
+
+    def hook(response, now):
+        seen.append((response.status_code, now))
+        return 7.0
+
+    client = make_client(clock, throttle_delay=hook)
+    start = clock.now()
+    with pytest.raises(RateLimited) as exc:
+        await client.get(URL)
+    assert exc.value.resume_at == start + timedelta(seconds=7)
+    assert seen == [(429, start)]
+
+
+async def test_throttle_delay_hook_returning_none_falls_back_to_retry_after_then_backoff(respx_mock, clock):
+    respx_mock.get(URL).mock(
+        side_effect=[httpx.Response(429, headers={"Retry-After": "30"}), httpx.Response(429)]
+    )
+    client = make_client(clock, throttle_delay=lambda r, now: None)
+    start = clock.now()
+    with pytest.raises(RateLimited) as first:
+        await client.get(URL)
+    assert first.value.resume_at == start + timedelta(seconds=30)
+    clock.advance(31)
+    start = clock.now()
+    with pytest.raises(RateLimited) as second:
+        await client.get(URL)
+    assert second.value.resume_at == start + timedelta(seconds=60)
+
+
+async def test_throttled_applies_the_same_pause_to_a_response_the_adapter_rejected(respx_mock, clock):
+    route = respx_mock.get(URL).mock(return_value=httpx.Response(200, json={"status": "error", "code": 429}))
+    client = make_client(clock, throttle_delay=lambda r, now: 45.0)
+    start = clock.now()
+    response = await client.get(URL)
+    error = client.throttled(response, status=429)
+    assert isinstance(error, RateLimited)
+    assert error.resume_at == start + timedelta(seconds=45)
+    assert error.status == 429
+    with pytest.raises(RateLimited):
+        await client.get(URL)
+    assert route.call_count == 1
