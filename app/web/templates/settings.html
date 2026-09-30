@@ -32,6 +32,21 @@
     <label>Secret key <input type="password" name="alpaca_secret_key" autocomplete="off"></label>
     {% endif %}
   </fieldset>
+  <fieldset>
+    <legend><strong>OANDA API token</strong> <span class="muted">(free practice account at oanda.com)</span></legend>
+    {% if s.oanda_from_env %}
+    <p class="muted">Set through environment variables (OANDA_API_TOKEN / OANDA_ENVIRONMENT). Edit your .env file to change it.</p>
+    {% else %}
+    <p class="muted">Current token: {{ oanda_hint }}. Leave the token blank to keep it.</p>
+    <label>API token <input type="password" name="oanda_api_token" autocomplete="off"></label>
+    <label>Environment
+      <select name="oanda_environment">
+        <option value="practice"{% if s.oanda_environment != "live" %} selected{% endif %}>practice</option>
+        <option value="live"{% if s.oanda_environment == "live" %} selected{% endif %}>live</option>
+      </select>
+    </label>
+    {% endif %}
+  </fieldset>
   <button type="submit">Save</button>
 </form>
 {% endblock %}

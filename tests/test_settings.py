@@ -51,3 +51,26 @@ async def test_environment_keys_override_saved_keys(sf):
 async def test_invalid_values_are_rejected(sf, values):
     with pytest.raises(ValueError):
         await SettingsService(sf, env()).save(values)
+
+
+async def test_oanda_defaults_and_credentials(sf):
+    svc = SettingsService(sf, env())
+    s = await svc.load()
+    assert (s.oanda_api_token, s.oanda_environment, s.oanda_from_env) == ("", "practice", False)
+    assert await svc.oanda_credentials() == ("", "practice")
+    await svc.save({"oanda_api_token": "TOK", "oanda_environment": "live"})
+    assert await svc.oanda_credentials() == ("TOK", "live")
+
+
+async def test_oanda_environment_variables_override_saved_values(sf):
+    svc = SettingsService(sf, env(oanda_api_token="ENVTOK", oanda_environment="live"))
+    await svc.save({"oanda_api_token": "TOK", "oanda_environment": "practice"})
+    s = await svc.load()
+    assert (s.oanda_api_token, s.oanda_environment, s.oanda_from_env) == ("ENVTOK", "live", True)
+    assert await svc.oanda_credentials() == ("ENVTOK", "live")
+
+
+@pytest.mark.parametrize("value", ["demo", "", "LIVE"])
+async def test_invalid_oanda_environment_is_rejected(sf, value):
+    with pytest.raises(ValueError, match="oanda_environment"):
+        await SettingsService(sf, env()).save({"oanda_environment": value})

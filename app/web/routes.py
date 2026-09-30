@@ -302,6 +302,7 @@ async def _settings_page(request: Request, error: str | None = None, status_code
         "presets": CRON_PRESETS,
         "next_run": svc.scheduler.next_run() if svc.scheduler else None,
         "key_hint": _key_hint(current.alpaca_key_id),
+        "oanda_hint": _key_hint(current.oanda_api_token),
     }
     return templates.TemplateResponse(request, "settings.html", context, status_code=status_code)
 
@@ -319,6 +320,8 @@ async def save_settings(
     schedule_enabled: Annotated[str | None, Form()] = None,
     alpaca_key_id: Annotated[str, Form()] = "",
     alpaca_secret_key: Annotated[str, Form()] = "",
+    oanda_api_token: Annotated[str, Form()] = "",
+    oanda_environment: Annotated[str, Form()] = "",
 ):
     svc = services(request)
     current = await svc.settings.load()
@@ -332,6 +335,11 @@ async def save_settings(
             values["alpaca_key_id"] = alpaca_key_id.strip()
         if alpaca_secret_key.strip():
             values["alpaca_secret_key"] = alpaca_secret_key.strip()
+    if not current.oanda_from_env:
+        if oanda_api_token.strip():
+            values["oanda_api_token"] = oanda_api_token.strip()
+        if oanda_environment.strip():
+            values["oanda_environment"] = oanda_environment.strip()
     try:
         await svc.settings.save(values)
     except ValueError as exc:

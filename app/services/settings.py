@@ -1,4 +1,4 @@
-"""User settings stored in the database; Alpaca keys from the environment take precedence."""
+"""User settings stored in the database; Alpaca and OANDA credentials from the environment take precedence."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -19,6 +19,8 @@ DEFAULTS = {
     "worker_concurrency": "3",
     "alpaca_key_id": "",
     "alpaca_secret_key": "",
+    "oanda_api_token": "",
+    "oanda_environment": "practice",
 }
 
 
@@ -30,6 +32,9 @@ class AppSettings:
     alpaca_key_id: str
     alpaca_secret_key: str
     alpaca_from_env: bool
+    oanda_api_token: str = ""
+    oanda_environment: str = "practice"
+    oanda_from_env: bool = False
 
 
 def _validate(values: Mapping[str, str]) -> None:
@@ -43,6 +48,8 @@ def _validate(values: Mapping[str, str]) -> None:
             CronTrigger.from_crontab(values["schedule_cron"], timezone=UTC)
         except ValueError as exc:
             raise ValueError(f"Invalid cron expression: {exc}") from exc
+    if "oanda_environment" in values and values["oanda_environment"] not in ("practice", "live"):
+        raise ValueError("oanda_environment must be 'practice' or 'live'")
     if "worker_concurrency" in values:
         try:
             n = int(values["worker_concurrency"])
@@ -62,6 +69,7 @@ class SettingsService:
             stored = {row[0]: row[1] for row in (await s.execute(select(Setting.key, Setting.value))).all()}
         v = DEFAULTS | stored
         from_env = bool(self._env.alpaca_key_id and self._env.alpaca_secret_key)
+        oanda_from_env = bool(self._env.oanda_api_token)
         return AppSettings(
             schedule_enabled=v["schedule_enabled"] == "true",
             schedule_cron=v["schedule_cron"],
@@ -69,6 +77,9 @@ class SettingsService:
             alpaca_key_id=self._env.alpaca_key_id if from_env else v["alpaca_key_id"],
             alpaca_secret_key=self._env.alpaca_secret_key if from_env else v["alpaca_secret_key"],
             alpaca_from_env=from_env,
+            oanda_api_token=self._env.oanda_api_token if oanda_from_env else v["oanda_api_token"],
+            oanda_environment=self._env.oanda_environment if oanda_from_env else v["oanda_environment"],
+            oanda_from_env=oanda_from_env,
         )
 
     async def save(self, values: Mapping[str, str]) -> None:
@@ -83,3 +94,7 @@ class SettingsService:
     async def alpaca_credentials(self) -> tuple[str, str]:
         s = await self.load()
         return s.alpaca_key_id, s.alpaca_secret_key
+
+    async def oanda_credentials(self) -> tuple[str, str]:
+        s = await self.load()
+        return s.oanda_api_token, s.oanda_environment

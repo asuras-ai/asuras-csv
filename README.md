@@ -7,7 +7,8 @@ Self-hosted tool that downloads 1-minute OHLCV candles into TimescaleDB and expo
 |---|---|---|---|
 | Crypto | Binance | none | Full history. Binance blocks some regions (HTTP 451), e.g. US servers. |
 | US stocks & ETFs | Alpaca | free | IEX feed from 2016, regular session only (09:30–16:00 ET, early closes respected). IEX volume is lower than consolidated volume. Prices are unadjusted. |
-| Forex | Dukascopy | none | Bid prices; volume = tick count. Slowest source (~45–60 min per year per pair). |
+| Forex | Dukascopy | none | Bid prices; volume = tick count. Slowest source (~45–60 min per year per pair). Dukascopy may refuse requests (HTTP 503) when it decides it has been asked too much; the job then waits and shows "unavailable" until it recovers. Use OANDA if this keeps happening. |
+| Forex, metals & CFDs | OANDA | free practice account | 1m bid candles; volume = tick count. Up to 5000 candles per request, so it is far faster than Dukascopy and the more reliable forex source. Create the token on your OANDA account's "Manage API Access" page, then set `OANDA_API_TOKEN` (and `OANDA_ENVIRONMENT` = `practice` or `live`) in `.env` or in Settings. |
 
 ## Run
 

@@ -27,7 +27,7 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 - `db`: `timescale/timescaledb:latest-pg16`, named volume for data, `restart: unless-stopped`.
 - `app`: built from repo `Dockerfile`, exposes port 8000, depends on `db`, `restart: unless-stopped`. Runs Alembic migrations on startup, then serves uvicorn.
 
-`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
+`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `OANDA_API_TOKEN`, `OANDA_ENVIRONMENT`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
 
 ## Data Model
 
@@ -77,7 +77,7 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 Progress is `(assets.fetched_until − range_start) / (range_end − range_start)`.
 
 ### `settings`
-Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`. Environment variables override DB values for the Alpaca keys.
+Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`. Environment variables override DB values for the Alpaca keys and the OANDA token (the environment then comes from `OANDA_ENVIRONMENT` too).
 
 ## Providers
 
@@ -126,6 +126,15 @@ class Provider(Protocol):
 - `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
 
+### OANDA (forex, metals, CFDs)
+- OANDA v20 REST API. Hosts: practice `https://api-fxpractice.oanda.com` (free demo account), live `https://api-fxtrade.oanda.com`, chosen by `OANDA_ENVIRONMENT` (unknown values mean practice). Auth: `Authorization: Bearer <token>`; the token is created on the account's "Manage API Access" page and is required (missing token = permanent error before any request). Every request sends `Accept-Datetime-Format: UNIX`, so `from`/`to` are UNIX seconds and each candle `time` is a string like `"1476717360.000000000"`.
+- Candles: `GET /v3/instruments/{instrument}/candles?granularity=M1&price=B&from=..&to=..` (bid, consistent with Dukascopy). `count` is never sent together with `from`+`to`; a range may hold at most 5000 candles, so `fetch` walks windows `[cursor, min(cursor + 5000 min, end))`, one request and one `Chunk` each. Prices are strings; volume is tick volume.
+- A candle with `complete: false` is dropped along with everything after it, and `covered_until` is that candle's time. If that equals the cursor, the fetch stops so it cannot spin. Otherwise `covered_until` is the window end, so empty windows (weekends) still advance the cursor.
+- Symbols: `GET /v3/accounts`, then `GET /v3/accounts/{id}/instruments` of the first account, cached. Types CURRENCY, METAL, CFD map to classes forex, metal, cfd. Jesse symbol = name with `_` replaced by `-` (`EUR-USD`, `XAU-USD`, `US30-USD`). Search ignores `_`, `-` and `/`.
+- `earliest_available`: one request from 2000-01-01 with `count=1`; the first candle's time.
+- `available_until` = current minute minus a 2-minute lag (`PUBLISH_LAG`). `estimate_requests` = ceil(minutes / 5000).
+- Budget: OANDA allows 120 requests/s per IP and answers 429 beyond it. The app uses 20 req/s with 2 in flight. There are no quota headers. Errors 400/401/403/404 are permanent; 429 is throttling.
+
 ## Update Logic
 
 When a job is created for an asset:
@@ -155,6 +164,7 @@ Goal: a multi-year backfill runs unattended to completion, with the user only wa
 | Binance | 3000 weight/min (50% of the 6000 limit, leaving room for other tools on the same IP) | 2 |
 | Alpaca | 180 req/min (90% of 200) | 1 |
 | Dukascopy | 2 files/s | 2 |
+| OANDA | 20 req/s (of 120) | 2 |
 
 The client uses a token bucket for the budget. It also reads the provider's rate-limit headers after each response: when they report remaining quota near zero, it sleeps until the reported reset time instead of hitting the limit. Budgets are constants in each adapter.
 
@@ -204,7 +214,7 @@ APScheduler runs in the app process. When `schedule_enabled` is set, it runs on 
 - **Export dialog:** start/end date inputs, pre-filled with the stored range, and a Download button.
 - **Delete:** an in-page confirmation, which then deletes the asset and all its candles.
 - **Jobs:** the last 200 jobs with asset, kind, status, progress, requests made, candles added, duration, error, and a Cancel action for active jobs.
-- **Settings:** schedule on/off plus cron preset, worker concurrency, and Alpaca key/secret (masked; shows "set via environment" when env vars are present, which makes them read-only in the UI).
+- **Settings:** schedule on/off plus cron preset, worker concurrency, and Alpaca key/secret and OANDA token plus practice/live environment (masked; shows "set via environment" when env vars are present, which makes them read-only in the UI).
 
 Candle count and first/last candle per asset come from one aggregate query per asset list render, cached for a short time if it is slow.
 
