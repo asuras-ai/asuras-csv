@@ -153,3 +153,58 @@ async def test_blank_key_fields_keep_stored_values(client, sf):
     assert r.status_code == 303
     svc = SettingsService(sf, EnvConfig(_env_file=None, database_url="postgresql+asyncpg://u@h/d", alpaca_key_id="", alpaca_secret_key=""))
     assert await svc.alpaca_credentials() == ("KEYID1234", "sec-1")
+
+
+async def test_oanda_token_is_masked_and_never_rendered(client, sf):
+    base = {"schedule_cron": "0 * * * *", "worker_concurrency": "2"}
+    r = await client.post("/settings", data=base | {"oanda_api_token": "tok-abcdef-9876", "oanda_environment": "live"})
+    assert r.status_code == 303
+    page = (await client.get("/settings")).text
+    assert "tok-abcdef-9876" not in page and "•••• 9876" in page
+    assert 'name="oanda_api_token"' in page and 'name="oanda_environment"' in page
+    assert '<option value="live" selected>' in page
+    # A blank token keeps the stored one; the environment can change independently.
+    r = await client.post("/settings", data=base | {"oanda_api_token": "", "oanda_environment": "practice"})
+    assert r.status_code == 303
+    svc = SettingsService(sf, EnvConfig(_env_file=None, database_url="postgresql+asyncpg://u@h/d", oanda_api_token=""))
+    assert await svc.oanda_credentials() == ("tok-abcdef-9876", "practice")
+    r = await client.post("/settings", data=base | {"oanda_environment": "bogus"})
+    assert r.status_code == 400 and 'class="error"' in r.text
+
+
+async def test_oanda_env_token_is_read_only(sf, clock):
+    env = EnvConfig(
+        _env_file=None, database_url="postgresql+asyncpg://unused@localhost/unused", oanda_api_token="ENVTOK5678", oanda_environment="live"
+    )
+    app = create_app(env, sf=sf, clock=clock, registry=ProviderRegistry([FakeProvider(clock)]), start_background=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        page = (await c.get("/settings")).text
+        assert "ENVTOK5678" not in page and 'name="oanda_api_token"' not in page and 'name="oanda_environment"' not in page
+        r = await c.post(
+            "/settings",
+            data={"schedule_cron": "0 * * * *", "worker_concurrency": "2", "oanda_api_token": "OTHER", "oanda_environment": "practice"},
+        )
+        assert r.status_code == 303
+    assert await SettingsService(sf, env).oanda_credentials() == ("ENVTOK5678", "live")
+    async with sf() as s:
+        stored = (await s.scalars(select(Setting.key).where(Setting.key.like("oanda_%")))).all()
+    assert stored == []
+
+
+async def test_oanda_environment_from_env_is_read_only_while_the_token_stays_editable(sf, clock):
+    env = EnvConfig(
+        _env_file=None, database_url="postgresql+asyncpg://unused@localhost/unused", oanda_environment="live"
+    )
+    app = create_app(env, sf=sf, clock=clock, registry=ProviderRegistry([FakeProvider(clock)]), start_background=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        page = (await c.get("/settings")).text
+        assert 'name="oanda_api_token"' in page and 'name="oanda_environment"' not in page
+        assert "set via environment" in page
+        r = await c.post(
+            "/settings",
+            data={"schedule_cron": "0 * * * *", "worker_concurrency": "2", "oanda_api_token": "TOK1", "oanda_environment": "practice"},
+        )
+        assert r.status_code == 303
+    assert await SettingsService(sf, env).oanda_credentials() == ("TOK1", "live")
+    async with sf() as s:
+        assert (await s.scalars(select(Setting.key).where(Setting.key == "oanda_environment"))).all() == []

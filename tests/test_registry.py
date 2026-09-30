@@ -20,3 +20,9 @@ def test_rank_matches_prefers_exact_then_prefix():
     assert [s.provider_symbol for s in rank_matches(symbols, "btc")] == ["BTC", "BTCUSDT", "ETHBTC", "WBTCBTC"]
     assert rank_matches(symbols, "  ") == []
     assert [s.provider_symbol for s in rank_matches(symbols, "BTC-USDT")] == ["BTCUSDT"]
+
+
+def test_rank_matches_ignores_underscores():
+    symbols = [SymbolInfo("EUR_USD", "forex", "EUR-USD", "Euro vs Dollar"), SymbolInfo("XAU_USD", "metal", "XAU-USD", "Gold")]
+    assert [s.provider_symbol for s in rank_matches(symbols, "eurusd")] == ["EUR_USD"]
+    assert [s.provider_symbol for s in rank_matches(symbols, "eur_usd")] == ["EUR_USD"]

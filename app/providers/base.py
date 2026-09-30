@@ -48,7 +48,7 @@ class ProviderRegistry:
 
 
 def _normalise(value: str) -> str:
-    return value.upper().replace("-", "").replace("/", "").strip()
+    return value.upper().replace("-", "").replace("/", "").replace("_", "").strip()
 
 
 def rank_matches(symbols: Iterable[SymbolInfo], query: str, limit: int = 20) -> list[SymbolInfo]:

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from app.clock import Clock
 from app.config import EnvConfig
 from app.db import SessionFactory, make_engine, make_session_factory
-from app.providers import alpaca, binance, dukascopy
+from app.providers import alpaca, binance, dukascopy, oanda
 from app.providers.base import ProviderRegistry
 from app.providers.http import ProviderClient
 from app.scheduler import UpdateScheduler
@@ -33,6 +33,7 @@ def build_registry(http: httpx.AsyncClient, clock: Clock, settings: SettingsServ
                 ProviderClient(alpaca.POLICY, http, clock), settings.alpaca_credentials, env.alpaca_trading_url
             ),
             dukascopy.DukascopyProvider(ProviderClient(dukascopy.POLICY, http, clock)),
+            oanda.OandaProvider(ProviderClient(oanda.POLICY, http, clock), settings.oanda_credentials),
         ]
     )
 

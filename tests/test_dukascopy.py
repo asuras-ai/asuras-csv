@@ -205,3 +205,10 @@ async def test_jpy_prices_are_scaled_through_fetch(respx_mock, provider):
     respx_mock.get(host="duka.test").mock(return_value=httpx.Response(200, content=bi5([(0, 150123)])))
     [chunk] = [c async for c in provider.fetch("USDJPY", HOUR0, HOUR0 + HOUR)]
     assert chunk.candles[0].close == 150.123
+
+
+def test_pacing_is_conservative_to_avoid_being_blocked():
+    from app.providers import dukascopy
+
+    assert (dukascopy.POLICY.rate, dukascopy.POLICY.burst, dukascopy.POLICY.concurrency) == (2.0, 2, 2)
+    assert dukascopy.WINDOW == 4

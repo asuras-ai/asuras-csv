@@ -15,7 +15,7 @@ from app.providers.http import ProviderClient, RateLimitPolicy
 
 BASE_URL = "https://datafeed.dukascopy.com/datafeed"
 RECORD = struct.Struct(">3I2f")  # ms offset in hour, ask, bid, ask volume, bid volume
-WINDOW = 8  # hours scheduled ahead; the client's concurrency (4) limits actual parallel downloads
+WINDOW = 4  # hours scheduled ahead; the client's concurrency (2) limits actual parallel downloads
 SATURDAY = 5
 
 # Conservative default start dates; the Add form lets the user choose a later one.
@@ -33,9 +33,9 @@ PUBLISH_LAG = 2 * HOUR  # the last finished hours are often published late
 
 POLICY = RateLimitPolicy(
     name="Dukascopy",
-    rate=8.0,
-    burst=8,
-    concurrency=4,
+    rate=2.0,
+    burst=2,
+    concurrency=2,
     ok_statuses=frozenset({200, 404}),  # 404 = no file for that hour (market closed)
     throttle_statuses=frozenset({429, 503}),
 )

@@ -7,6 +7,7 @@ from datetime import datetime
 from app.models import ACTIVE_STATUSES
 from app.providers.base import Provider
 
+NOT_RUNNING_STATUSES = ("waiting", "paused")  # no ETA while nothing is being downloaded
 MIN_REQUESTS_FOR_MEASURED_RATE = 20
 MIN_RUN_SECONDS_FOR_MEASURED_RATE = 1.0
 
@@ -24,7 +25,7 @@ def job_progress(job, fetched_until: datetime | None, provider: Provider) -> Job
     cursor = max(fetched_until or job.range_start, job.range_start)
     percent = 100.0 if span <= 0 else min(100.0, (cursor - job.range_start).total_seconds() / span * 100)
     eta = None
-    if job.status in ACTIVE_STATUSES:
+    if job.status in ACTIVE_STATUSES and job.status not in NOT_RUNNING_STATUSES:
         if span <= 0:
             eta = 0.0
         else:

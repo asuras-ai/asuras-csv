@@ -63,9 +63,11 @@ def test_non_positive_policy_rate_gives_no_eta():
     assert job_progress(job(), T0 + timedelta(minutes=50), provider).eta_seconds is None
 
 
-def test_paused_job_still_has_eta_and_failed_job_has_none():
-    assert job_progress(job(status="paused"), T0 + timedelta(minutes=50), FakeProvider()).eta_seconds == pytest.approx(0.5)
-    assert job_progress(job(status="failed"), T0 + timedelta(minutes=50), FakeProvider()).eta_seconds is None
+def test_only_running_or_queued_jobs_have_an_eta():
+    cursor = T0 + timedelta(minutes=50)
+    assert job_progress(job(status="queued"), cursor, FakeProvider()).eta_seconds == pytest.approx(0.5)
+    for status in ("paused", "waiting", "failed"):
+        assert job_progress(job(status=status), cursor, FakeProvider()).eta_seconds is None
 
 
 @pytest.mark.parametrize(
