@@ -41,8 +41,8 @@ def no_throttle_delay(response: httpx.Response, now: datetime) -> Throttle | flo
     return None
 
 
-def not_throttled(response: httpx.Response) -> bool:
-    return False
+def not_throttled(response: httpx.Response) -> int | None:
+    return None
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ class RateLimitPolicy:
     throttle_statuses: frozenset[int] = frozenset({429})
     permanent_messages: Mapping[int, str] = field(default_factory=dict)
     quota_delay: QuotaDelay = no_quota_delay
-    is_throttled: Callable[[httpx.Response], bool] = not_throttled  # throttling reported in a status that is not in throttle_statuses
+    is_throttled: Callable[[httpx.Response], int | None] = not_throttled  # throttling hidden in another status; returns the status to report
     throttle_delay: ThrottleDelay = no_throttle_delay  # provider-specific pause in seconds for a throttling response; None = use Retry-After / backoff
 
 
@@ -102,8 +102,9 @@ class ProviderClient:
                 problem = f"network error: {exc!r}"
             else:
                 status = response.status_code
-                if status in self.policy.throttle_statuses or self.policy.is_throttled(response):
-                    raise self._throttle(response)
+                reported = self.policy.is_throttled(response)
+                if status in self.policy.throttle_statuses or reported:
+                    raise self._throttle(response, reported)
                 if not self._pause_active(self._clock.now()):  # a stale success must not end the streak or the backoff
                     self._throttle_seconds = DEFAULT_THROTTLE_SECONDS
                     self._throttled_since = None
@@ -142,12 +143,12 @@ class ProviderClient:
                     wait = (1 - self._tokens) / self.policy.rate
             await self._clock.sleep(wait)
 
-    def _throttle(self, response: httpx.Response) -> RateLimited:
+    def _throttle(self, response: httpx.Response, reported: int | None = None) -> RateLimited:
         now = self._clock.now()
         idle = self._paused_until is not None and now - self._paused_until > timedelta(seconds=DEFAULT_THROTTLE_SECONDS)
         if self._throttled_since is None or idle:  # idle: nobody finished the old streak, so start a new one
             self._throttled_since = now
-        self._throttle_status = response.status_code
+        self._throttle_status = reported or response.status_code
         pause_active = self._pause_active(now)
         hook = self.policy.throttle_delay(response, now)
         delay, reason = (hook.delay, hook.reason) if isinstance(hook, Throttle) else (hook, None)

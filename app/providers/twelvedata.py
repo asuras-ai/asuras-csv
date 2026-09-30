@@ -47,10 +47,18 @@ def _body(response: httpx.Response):
         return None
 
 
-def _is_throttled(response: httpx.Response) -> bool:
+def _code(data) -> int | None:
+    """The error code of a JSON error body, whether Twelve Data sent it as 429 or "429"."""
+    try:
+        return int(data["code"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _is_throttled(response: httpx.Response) -> int | None:
     """Twelve Data reports rate limits as code 429 inside the JSON body, sometimes with another HTTP status."""
     data = _body(response)
-    return isinstance(data, dict) and data.get("status") == "error" and data.get("code") == 429
+    return 429 if isinstance(data, dict) and data.get("status") == "error" and _code(data) == 429 else None
 
 
 def _throttle_delay(response: httpx.Response, now: datetime) -> Throttle | float | None:
@@ -147,11 +155,10 @@ class TwelveDataProvider:
     def _raise_for_error(self, response: httpx.Response, data) -> None:
         """Throttling never gets here: the client classifies it first (see _is_throttled)."""
         body = data if isinstance(data, dict) else {}
-        try:
-            code = int(body.get("code", response.status_code))
-        except (TypeError, ValueError):
-            code = response.status_code
+        code = _code(body) or response.status_code
         message = str(body.get("message", response.text))[:200]
+        if code == 429:  # backstop: the client normally classifies this first
+            raise TransientError(f"Twelve Data: rate limited (HTTP 429: {message})")
         if code == 400 and "no data is available" in message.lower():
             raise NoData
         if code in POLICY.permanent_messages:
@@ -257,7 +264,10 @@ class TwelveDataProvider:
                 raise TransientError(f"Twelve Data: malformed candle for {symbol}") from None
             if any(not cursor <= row[0] < window_end for row in rows):
                 # Never clip silently: it would hide a timezone or range misunderstanding and leave a permanent gap.
-                raise TransientError("Twelve Data: returned candles outside the requested window")
+                first = next(row[0] for row in rows if not cursor <= row[0] < window_end)
+                raise TransientError(
+                    f"Twelve Data: {symbol} returned candle {first:%Y-%m-%dT%H:%MZ} outside the requested window"
+                )
             found = {row[0]: Candle(*row) for row in rows}
             yield Chunk([found[ts] for ts in sorted(found)], window_end)
             cursor = window_end

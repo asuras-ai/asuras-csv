@@ -94,7 +94,7 @@ async def test_rows_outside_the_window_raise_transient_instead_of_being_clipped(
     end = T0 + timedelta(minutes=10)
     series_route(respx_mock, [value(T0), value(T0 + timedelta(minutes=offset))])
     chunks = []
-    with pytest.raises(TransientError, match="outside the requested window"):
+    with pytest.raises(TransientError, match=r"XAU/USD returned candle .* outside the requested window"):
         async for chunk in make_provider(clock).fetch("XAU/USD", T0, end):
             chunks.append(chunk)
     assert chunks == []  # nothing yielded, so the cursor cannot move
@@ -182,6 +182,7 @@ async def test_minute_limit_pauses_until_next_minute_plus_five_seconds(respx_moc
     with pytest.raises(RateLimited) as exc:
         await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
     assert exc.value.resume_at == datetime(2024, 1, 8, 13, 38, 5, tzinfo=UTC)
+    assert exc.value.status == 429
     assert "unavailable" not in str(exc.value)
 
 
@@ -386,3 +387,26 @@ async def test_key_is_scrubbed_from_error_messages(respx_mock, clock, status):
     with pytest.raises(PermanentError) as exc:
         await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
     assert KEY not in str(exc.value) and "***" in str(exc.value)
+
+
+async def test_tripwire_message_names_the_symbol_and_first_offending_timestamp(respx_mock, clock):
+    bad = T0 + timedelta(minutes=30)
+    series_route(respx_mock, [value(T0), value(bad)])
+    with pytest.raises(TransientError) as exc:
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=10))
+    assert str(exc.value) == "Twelve Data: XAU/USD returned candle 2024-01-08T00:30Z outside the requested window"
+
+
+@pytest.mark.parametrize("code", [429, "429"])
+async def test_body_429_is_throttling_whatever_the_code_type(respx_mock, clock, code):
+    respx_mock.get(host=HOST, path="/time_series").mock(
+        return_value=httpx.Response(200, json={"code": code, "message": "x", "status": "error"})
+    )
+    with pytest.raises(RateLimited):
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
+
+
+def test_a_429_reaching_the_error_mapper_is_transient_not_unexpected(clock):
+    response = httpx.Response(200, json={})
+    with pytest.raises(TransientError):
+        make_provider(clock)._raise_for_error(response, {"code": "429", "message": "x", "status": "error"})

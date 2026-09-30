@@ -351,7 +351,7 @@ async def test_throttle_delay_hook_returning_none_falls_back_to_retry_after_then
 
 async def test_is_throttled_classifies_a_non_throttle_status_before_success_bookkeeping(respx_mock, clock):
     route = respx_mock.get(URL).mock(return_value=httpx.Response(200, json={"code": 429}))
-    client = make_client(clock, is_throttled=lambda r: r.json().get("code") == 429, throttle_delay=lambda r, now: 45.0)
+    client = make_client(clock, is_throttled=lambda r: r.json().get("code") or None, throttle_delay=lambda r, now: 45.0)
     start = clock.now()
     with pytest.raises(RateLimited) as exc:
         await client.get(URL)
@@ -359,6 +359,18 @@ async def test_is_throttled_classifies_a_non_throttle_status_before_success_book
     with pytest.raises(RateLimited):
         await client.get(URL)
     assert route.call_count == 1
+
+
+async def test_is_throttled_status_is_reported_in_a_long_streak(respx_mock, clock):
+    respx_mock.get(URL).mock(return_value=httpx.Response(200, json={"code": 429}))
+    client = make_client(clock, is_throttled=lambda r: r.json().get("code") or None)
+    last = None
+    for _ in range(4):
+        with pytest.raises(RateLimited) as exc:
+            await client.get(URL)
+        last = exc.value
+        clock.advance((last.resume_at - clock.now()).total_seconds())
+    assert last.since is not None and last.status == 429 and "(HTTP 429)" in str(last)
 
 
 async def test_is_throttled_defaults_to_false(respx_mock, clock):
