@@ -41,7 +41,7 @@ POLICY = RateLimitPolicy(
         400: "request rejected",
         401: KEY_REJECTED,
         403: KEY_REJECTED,
-        404: "symbol not found",
+        404: "not found — check the symbol and ALPACA_TRADING_URL",
         422: "request rejected, check the symbol",
     },
     quota_delay=alpaca_quota_delay,
@@ -59,6 +59,12 @@ def _in_session(ts: datetime, sessions: Sessions) -> bool:
     return session is not None and session[0] <= ts < session[1]
 
 
+def _base_url(url: str) -> str:
+    """Accept base URLs with or without the /v2 suffix Alpaca's dashboard shows."""
+    url = url.strip().rstrip("/")
+    return url.removesuffix("/v2")
+
+
 class AlpacaProvider:
     name = "alpaca"
     label = "Alpaca (US stocks & ETFs)"
@@ -67,8 +73,8 @@ class AlpacaProvider:
     def __init__(self, client: ProviderClient, credentials: Credentials, trading_url: str, data_url: str = DATA_URL):
         self.client = client
         self._credentials = credentials
-        self._trading = trading_url.rstrip("/")
-        self._data = data_url.rstrip("/")
+        self._trading = _base_url(trading_url)
+        self._data = _base_url(data_url)
         self._symbols: list[SymbolInfo] | None = None
 
     async def _headers(self) -> dict[str, str]:

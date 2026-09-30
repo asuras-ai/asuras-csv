@@ -127,3 +127,21 @@ def test_available_until_lags_two_minutes(clock):
     provider = make_provider(clock)
     now = datetime(2024, 5, 1, 15, 30, 45, tzinfo=UTC)
     assert provider.available_until(now) == datetime(2024, 5, 1, 15, 28, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("trading_url", ["https://trading.test/v2", "https://trading.test/v2/", "https://trading.test/"])
+async def test_base_urls_copied_with_v2_suffix_still_work(respx_mock, clock, trading_url):
+    # Alpaca's dashboard shows endpoints like https://paper-api.alpaca.markets/v2
+    route = respx_mock.get(host="trading.test", path="/v2/assets").mock(
+        return_value=httpx.Response(200, json=[{"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "tradable": True}])
+    )
+
+    async def credentials():
+        return ("KEY", "SECRET")
+
+    provider = AlpacaProvider(
+        ProviderClient(POLICY, httpx.AsyncClient(), clock), credentials, trading_url=trading_url, data_url="https://data.test/v2"
+    )
+    assert [s.provider_symbol for s in await provider.search_symbols("SPY")] == ["SPY"]
+    assert route.call_count == 1
+    assert provider._data == "https://data.test"
