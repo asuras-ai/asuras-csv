@@ -237,3 +237,27 @@ async def test_twelvedata_env_key_is_read_only(sf, clock):
     assert await SettingsService(sf, env).twelvedata_credentials() == "ENVKEY5678"
     async with sf() as s:
         assert (await s.scalars(select(Setting.key).where(Setting.key.like("twelvedata_%")))).all() == []
+
+
+async def test_twelvedata_search_rate_limit_is_shown_as_a_message_not_a_server_error(sf, clock):
+    import respx
+
+    from app.providers import twelvedata
+    from app.providers.http import ProviderClient
+
+    async def key():
+        return ""
+
+    http = httpx.AsyncClient()
+    provider = twelvedata.TwelveDataProvider(
+        ProviderClient(twelvedata.POLICY, http, clock), key, search_client=ProviderClient(twelvedata.SEARCH_POLICY, http, clock)
+    )
+    env = EnvConfig(_env_file=None, database_url="postgresql+asyncpg://unused@localhost/unused")
+    app = create_app(env, sf=sf, clock=clock, registry=ProviderRegistry([provider]), start_background=False)
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(host="api.twelvedata.com", path="/symbol_search").mock(
+            return_value=httpx.Response(429, json={"code": 429, "message": "for the current minute", "status": "error"})
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+            r = await c.get("/assets/search", params={"search_provider": "twelvedata", "q": "AAPL"})
+    assert r.status_code == 200 and "Twelve Data" in r.text and "rate limit" in r.text

@@ -3,9 +3,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.domain import PermanentError, RateLimited
+from app.domain import PermanentError, RateLimited, TransientError
 from app.providers.http import ProviderClient
-from app.providers.twelvedata import PAGE, POLICY, PUBLISH_LAG, TwelveDataProvider
+from app.providers.twelvedata import PAGE, POLICY, PUBLISH_LAG, SEARCH_POLICY, TwelveDataProvider
 from tests.fakes import FakeClock
 
 HOST = "api.twelvedata.com"
@@ -17,7 +17,10 @@ def make_provider(clock, key=KEY) -> TwelveDataProvider:
     async def credentials():
         return key
 
-    return TwelveDataProvider(ProviderClient(POLICY, httpx.AsyncClient(), clock), credentials)
+    http = httpx.AsyncClient()
+    return TwelveDataProvider(
+        ProviderClient(POLICY, http, clock), credentials, search_client=ProviderClient(SEARCH_POLICY, http, clock)
+    )
 
 
 def stamp(ts: datetime) -> str:
@@ -77,16 +80,24 @@ async def test_parses_string_prices_naive_utc_and_missing_volume_as_zero(respx_m
     assert b.volume == 3082.0
 
 
-async def test_descending_input_is_sorted_deduped_and_clipped_to_the_window(respx_mock, clock):
+async def test_out_of_order_and_duplicate_rows_inside_the_window_are_sorted_and_deduped(respx_mock, clock):
     end = T0 + timedelta(minutes=10)
     t = [T0 + timedelta(minutes=i) for i in range(3)]
-    series_route(
-        respx_mock,
-        [value(end), value(t[2]), value(t[1]), value(t[1], c="9.9"), value(t[0]), value(T0 - timedelta(minutes=1))],
-    )
+    series_route(respx_mock, [value(t[2]), value(t[1]), value(t[1], c="9.9"), value(t[0])])
     [chunk] = await collect(make_provider(clock), T0, end)
     assert [c.ts for c in chunk.candles] == t
     assert chunk.covered_until == end
+
+
+@pytest.mark.parametrize("offset", [-1, 10])
+async def test_rows_outside_the_window_raise_transient_instead_of_being_clipped(respx_mock, clock, offset):
+    end = T0 + timedelta(minutes=10)
+    series_route(respx_mock, [value(T0), value(T0 + timedelta(minutes=offset))])
+    chunks = []
+    with pytest.raises(TransientError, match="outside the requested window"):
+        async for chunk in make_provider(clock).fetch("XAU/USD", T0, end):
+            chunks.append(chunk)
+    assert chunks == []  # nothing yielded, so the cursor cannot move
 
 
 @pytest.mark.parametrize("as_http_status", [True, False])
@@ -132,22 +143,32 @@ async def test_unknown_symbol_404_is_permanent(respx_mock, clock, status):
         await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
 
 
-@pytest.mark.parametrize("status", [429, 200])
-async def test_daily_limit_pauses_until_next_utc_midnight_plus_a_minute(respx_mock, status):
+DAILY = "You have run out of API credits for the day. 800 API credits were used."
+
+
+@pytest.mark.parametrize("status", [429, 200, 400])
+async def test_daily_limit_pause_is_capped_at_an_hour_with_a_clear_reason(respx_mock, status):
     clock = FakeClock(datetime(2024, 1, 8, 13, 37, 20, tzinfo=UTC))
-    route = respx_mock.get(host=HOST, path="/time_series").mock(
-        return_value=httpx.Response(
-            status, json=error_body(429, "You have run out of API credits for the day. 800 API credits were used.")
-        )
-    )
+    route = respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(status, json=error_body(429, DAILY)))
     provider = make_provider(clock)
     with pytest.raises(RateLimited) as exc:
         await collect(provider, T0, T0 + timedelta(minutes=5))
-    assert exc.value.resume_at == datetime(2024, 1, 9, 0, 1, tzinfo=UTC)
-    assert exc.value.status == 429
-    with pytest.raises(RateLimited):  # the pause is shared: no second request goes out
+    resume = datetime(2024, 1, 8, 14, 37, 20, tzinfo=UTC)
+    assert exc.value.resume_at == resume
+    assert str(exc.value) == "Twelve Data daily credit limit reached, retrying at 14:37:20 UTC"
+    clock.advance(23 * 60)  # a second job, long after the outage threshold, still sees the daily-limit wording
+    with pytest.raises(RateLimited) as again:
         await collect(provider, T0, T0 + timedelta(minutes=5))
+    assert str(again.value) == str(exc.value) and "unavailable" not in str(again.value)
     assert route.call_count == 1
+
+
+async def test_daily_limit_pause_ends_at_midnight_plus_a_minute_when_that_is_sooner(respx_mock):
+    clock = FakeClock(datetime(2024, 1, 8, 23, 50, tzinfo=UTC))
+    respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(429, json=error_body(429, DAILY)))
+    with pytest.raises(RateLimited) as exc:
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
+    assert exc.value.resume_at == datetime(2024, 1, 9, 0, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("status", [429, 200])
@@ -161,6 +182,7 @@ async def test_minute_limit_pauses_until_next_minute_plus_five_seconds(respx_moc
     with pytest.raises(RateLimited) as exc:
         await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
     assert exc.value.resume_at == datetime(2024, 1, 8, 13, 38, 5, tzinfo=UTC)
+    assert "unavailable" not in str(exc.value)
 
 
 async def test_unrecognised_429_message_falls_back_to_the_default_backoff(respx_mock, clock):
@@ -172,8 +194,6 @@ async def test_unrecognised_429_message_falls_back_to_the_default_backoff(respx_
 
 
 async def test_malformed_success_body_is_transient(respx_mock, clock):
-    from app.domain import TransientError
-
     respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(200, json={"status": "ok"}))
     with pytest.raises(TransientError):
         await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
@@ -223,7 +243,7 @@ async def test_search_filters_maps_and_dedupes(respx_mock, clock):
     assert (by_symbol["SPY"].asset_class, by_symbol["SPY"].suggested_jesse_symbol) == ("etf", "SPY-USD")
     assert by_symbol["CL"].asset_class == "commodity" and by_symbol["CL"].suggested_jesse_symbol == "CL-USD"
     params = route.calls[0].request.url.params
-    assert (params["symbol"], params["outputsize"], params["apikey"]) == ("a", "30", KEY)
+    assert dict(params) == {"symbol": "a", "outputsize": "30"}  # the key is never sent to /symbol_search
 
 
 async def test_search_ranks_the_compact_query_to_the_slash_symbol(respx_mock, clock):
@@ -232,11 +252,56 @@ async def test_search_ranks_the_compact_query_to_the_slash_symbol(respx_mock, cl
     assert [s.provider_symbol for s in found] == ["XAU/USD"]
 
 
-async def test_search_works_without_a_key_and_sends_none(respx_mock, clock):
+async def test_search_works_without_a_key_and_never_sends_one(respx_mock, clock):
     route = search_route(respx_mock)
     found = await make_provider(clock, "").search_symbols("XAU/USD")
     assert [s.provider_symbol for s in found] == ["XAU/USD"]
-    assert "apikey" not in route.calls[0].request.url.params
+    await make_provider(clock, KEY).search_symbols("XAU/USD")
+    assert all("apikey" not in call.request.url.params for call in route.calls)
+
+
+async def test_search_results_are_cached_per_normalised_query_for_five_minutes(respx_mock, clock):
+    route = search_route(respx_mock)
+    provider = make_provider(clock)
+    first = await provider.search_symbols("XAU/USD")
+    assert await provider.search_symbols("  xau/usd ") == first
+    assert route.call_count == 1
+    clock.advance(299)
+    await provider.search_symbols("XAU/USD")
+    assert route.call_count == 1
+    clock.advance(2)
+    await provider.search_symbols("XAU/USD")
+    assert route.call_count == 2
+    await provider.search_symbols("AAPL")
+    assert route.call_count == 3
+
+
+async def test_search_uses_its_own_client_and_does_not_consume_download_pacing(respx_mock, clock):
+    search_route(respx_mock)
+    series = series_route(respx_mock, [], [])
+    provider = make_provider(clock)
+    await provider.fetch("XAU/USD", T0, T0 + timedelta(minutes=5)).__anext__()
+    before = clock.monotonic()
+    for q in ("a", "b", "c"):
+        await provider.search_symbols(q)
+    assert clock.monotonic() == before  # burst of 3 on the search client; no waiting for the 7/min download budget
+    assert provider.search_client is not provider.client and series.call_count == 1
+
+
+async def test_search_during_a_download_pause_is_not_blocked(respx_mock):
+    clock = FakeClock(datetime(2024, 1, 8, 13, 37, 20, tzinfo=UTC))
+    respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(429, json=error_body(429, DAILY)))
+    search_route(respx_mock)
+    provider = make_provider(clock)
+    with pytest.raises(RateLimited):
+        await collect(provider, T0, T0 + timedelta(minutes=5))
+    assert await provider.search_symbols("XAU/USD")
+
+
+async def test_search_429_raises_a_rate_limit_error(respx_mock, clock):
+    respx_mock.get(host=HOST, path="/symbol_search").mock(return_value=httpx.Response(429, json=error_body(429, "minute")))
+    with pytest.raises(RateLimited, match="Twelve Data"):
+        await make_provider(clock).search_symbols("AAPL")
 
 
 async def test_blank_search_sends_nothing(respx_mock, clock):
@@ -262,8 +327,25 @@ async def test_earliest_available_parses_unix_time(respx_mock, clock):
 
 async def test_earliest_available_without_unix_time_is_an_error(respx_mock, clock):
     respx_mock.get(host=HOST, path="/earliest_timestamp").mock(return_value=httpx.Response(200, json={"status": "ok"}))
-    with pytest.raises(Exception, match="Twelve Data"):
+    with pytest.raises(PermanentError, match="Twelve Data"):
         await make_provider(clock).earliest_available("AAPL")
+
+
+async def test_earliest_available_is_cached_per_symbol_for_an_hour(respx_mock, clock):
+    route = respx_mock.get(host=HOST, path="/earliest_timestamp").mock(
+        return_value=httpx.Response(200, json={"datetime": "2020-02-10 09:30:00", "unix_time": 1581327000})
+    )
+    provider = make_provider(clock)
+    assert await provider.earliest_available("AAPL") == await provider.earliest_available("AAPL")
+    assert route.call_count == 1
+    await provider.earliest_available("MSFT")
+    assert route.call_count == 2
+    clock.advance(3570)  # MSFT already waited ~9s for the download budget
+    await provider.earliest_available("AAPL")
+    assert route.call_count == 2
+    clock.advance(60)
+    await provider.earliest_available("AAPL")
+    assert route.call_count == 3
 
 
 def test_estimate_requests(clock):
@@ -275,11 +357,32 @@ def test_estimate_requests(clock):
     assert p.estimate_requests(T0, T0 + timedelta(minutes=12_000)) == 3
 
 
-def test_available_until_lags_two_minutes(clock):
-    assert PUBLISH_LAG == timedelta(minutes=2)
-    assert make_provider(clock).available_until(datetime(2024, 1, 8, 10, 7, 41, tzinfo=UTC)) == datetime(2024, 1, 8, 10, 5, tzinfo=UTC)
+def test_available_until_lags_fifteen_minutes(clock):
+    assert PUBLISH_LAG == timedelta(minutes=15)
+    assert make_provider(clock).available_until(datetime(2024, 1, 8, 10, 27, 41, tzinfo=UTC)) == datetime(2024, 1, 8, 10, 12, tzinfo=UTC)
 
 
 def test_policy_stays_under_eight_requests_a_minute():
     assert POLICY.rate == pytest.approx(7 / 60) and POLICY.burst == 1 and POLICY.concurrency == 1
     assert POLICY.throttle_statuses == frozenset({429})
+
+
+async def test_server_error_inside_a_200_is_transient(respx_mock, clock):
+    respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(200, json=error_body(500, "internal")))
+    with pytest.raises(TransientError):
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
+
+
+async def test_non_json_400_is_permanent(respx_mock, clock):
+    respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(400, text="<html>bad</html>"))
+    with pytest.raises(PermanentError, match="request rejected"):
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
+
+
+@pytest.mark.parametrize("status", [401, 200, 400])
+async def test_key_is_scrubbed_from_error_messages(respx_mock, clock, status):
+    body = error_body(401 if status != 400 else 400, f"bad key {KEY} in request")
+    respx_mock.get(host=HOST, path="/time_series").mock(return_value=httpx.Response(status, json=body))
+    with pytest.raises(PermanentError) as exc:
+        await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
+    assert KEY not in str(exc.value) and "***" in str(exc.value)

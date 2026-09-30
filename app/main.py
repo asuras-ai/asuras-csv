@@ -35,7 +35,9 @@ def build_registry(http: httpx.AsyncClient, clock: Clock, settings: SettingsServ
             dukascopy.DukascopyProvider(ProviderClient(dukascopy.POLICY, http, clock)),
             oanda.OandaProvider(ProviderClient(oanda.POLICY, http, clock), settings.oanda_credentials),
             twelvedata.TwelveDataProvider(
-                ProviderClient(twelvedata.POLICY, http, clock), settings.twelvedata_credentials
+                ProviderClient(twelvedata.POLICY, http, clock),
+                settings.twelvedata_credentials,
+                search_client=ProviderClient(twelvedata.SEARCH_POLICY, http, clock),
             ),
         ]
     )

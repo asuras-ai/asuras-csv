@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from app.domain import PermanentError, RateLimited, TransientError
-from app.providers.http import ProviderClient, RateLimitPolicy
+from app.providers.http import ProviderClient, RateLimitPolicy, Throttle
 
 URL = "https://api.test/data"
 
@@ -349,15 +349,44 @@ async def test_throttle_delay_hook_returning_none_falls_back_to_retry_after_then
     assert second.value.resume_at == start + timedelta(seconds=60)
 
 
-async def test_throttled_applies_the_same_pause_to_a_response_the_adapter_rejected(respx_mock, clock):
-    route = respx_mock.get(URL).mock(return_value=httpx.Response(200, json={"status": "error", "code": 429}))
-    client = make_client(clock, throttle_delay=lambda r, now: 45.0)
+async def test_is_throttled_classifies_a_non_throttle_status_before_success_bookkeeping(respx_mock, clock):
+    route = respx_mock.get(URL).mock(return_value=httpx.Response(200, json={"code": 429}))
+    client = make_client(clock, is_throttled=lambda r: r.json().get("code") == 429, throttle_delay=lambda r, now: 45.0)
     start = clock.now()
-    response = await client.get(URL)
-    error = client.throttled(response, status=429)
-    assert isinstance(error, RateLimited)
-    assert error.resume_at == start + timedelta(seconds=45)
-    assert error.status == 429
+    with pytest.raises(RateLimited) as exc:
+        await client.get(URL)
+    assert exc.value.resume_at == start + timedelta(seconds=45)
     with pytest.raises(RateLimited):
         await client.get(URL)
     assert route.call_count == 1
+
+
+async def test_is_throttled_defaults_to_false(respx_mock, clock):
+    respx_mock.get(URL).mock(return_value=httpx.Response(200, json={"code": 429}))
+    assert (await make_client(clock).get(URL)).status_code == 200
+
+
+async def test_throttle_reason_replaces_both_wordings_even_after_the_outage_threshold(respx_mock, clock):
+    respx_mock.get(URL).mock(return_value=httpx.Response(429))
+    client = make_client(clock, throttle_delay=lambda r, now: Throttle(3600.0, "Test daily limit reached"))
+    start = clock.now()
+    with pytest.raises(RateLimited) as first:
+        await client.get(URL)
+    resume = start + timedelta(seconds=3600)
+    assert str(first.value) == f"Test daily limit reached, retrying at {resume:%H:%M:%S} UTC"
+    clock.advance(23 * 60)  # well past UNAVAILABLE_AFTER, pause still active
+    with pytest.raises(RateLimited) as second:
+        await client.get(URL)
+    assert str(second.value) == str(first.value) and second.value.since is None
+
+
+async def test_throttle_reason_is_dropped_once_a_plain_throttle_follows(respx_mock, clock):
+    respx_mock.get(URL).mock(side_effect=[httpx.Response(429, json={"r": 1}), httpx.Response(429)])
+    client = make_client(clock, throttle_delay=lambda r, now: Throttle(10.0, "Why") if r.content else None)
+    with pytest.raises(RateLimited) as first:
+        await client.get(URL)
+    assert "Why" in str(first.value)
+    clock.advance(11)
+    with pytest.raises(RateLimited) as second:
+        await client.get(URL)
+    assert "Why" not in str(second.value)

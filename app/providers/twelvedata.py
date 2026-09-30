@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from app.domain import MINUTE, Candle, Chunk, PermanentError, SymbolInfo, TransientError, floor_minute
+from app.domain import (
+    MINUTE,
+    Candle,
+    Chunk,
+    PermanentError,
+    SymbolInfo,
+    TransientError,
+    floor_minute,
+)
 from app.providers.base import rank_matches
-from app.providers.http import ProviderClient, RateLimitPolicy
+from app.providers.http import ProviderClient, RateLimitPolicy, Throttle
 
 BASE = "https://api.twelvedata.com"
 PAGE = 4999  # the API returns at most 5000 rows; one fewer keeps an inclusive end_date under the cap
@@ -24,18 +33,34 @@ STOCK_TYPES = {"Common Stock": "stock", "ETF": "etf"}
 
 Credentials = Callable[[], Awaitable[str]]
 
-PUBLISH_LAG = 2 * MINUTE  # keep the cursor behind candles that may still be forming
+PUBLISH_LAG = 15 * MINUTE  # free-plan bars can publish late; keep the cursor well behind the live edge
+DAILY_PAUSE_CAP = 3600.0  # the daily credit reset time is unverified, so re-probe at least hourly
+SEARCH_TTL = timedelta(minutes=5)
+EARLIEST_TTL = timedelta(hours=1)
+CACHE_LIMIT = 200
 
 
-def _throttle_delay(response: httpx.Response, now: datetime) -> float | None:
-    """Twelve Data words its 429s differently for the per-minute and the daily credit limit."""
+def _body(response: httpx.Response):
     try:
-        message = str(response.json().get("message", "")).lower()
-    except (ValueError, AttributeError):
+        return response.json()
+    except ValueError:
         return None
+
+
+def _is_throttled(response: httpx.Response) -> bool:
+    """Twelve Data reports rate limits as code 429 inside the JSON body, sometimes with another HTTP status."""
+    data = _body(response)
+    return isinstance(data, dict) and data.get("status") == "error" and data.get("code") == 429
+
+
+def _throttle_delay(response: httpx.Response, now: datetime) -> Throttle | float | None:
+    """Twelve Data words its 429s differently for the per-minute and the daily credit limit."""
+    data = _body(response)
+    message = str(data.get("message", "")).lower() if isinstance(data, dict) else ""
     if "for the day" in message:
         tomorrow = floor_minute(now).replace(hour=0, minute=0) + timedelta(days=1)
-        return (tomorrow - now).total_seconds() + 60.0
+        seconds = min((tomorrow - now).total_seconds() + 60.0, DAILY_PAUSE_CAP)
+        return Throttle(seconds, "Twelve Data daily credit limit reached")
     if "minute" in message:
         return (floor_minute(now) + MINUTE - now).total_seconds() + 5.0
     return None
@@ -55,8 +80,12 @@ POLICY = RateLimitPolicy(
         403: KEY_REJECTED,
         404: "not found — check the symbol",
     },
+    is_throttled=_is_throttled,
     throttle_delay=_throttle_delay,
 )
+
+# Searching must not eat the download budget: it has its own light client and never sends the key.
+SEARCH_POLICY = replace(POLICY, rate=1.0, burst=3, concurrency=2)
 
 
 class NoData(Exception):
@@ -72,14 +101,25 @@ def _jesse_symbol(symbol: str, asset_class: str) -> str:
     return base if "-" in base and asset_class in ("forex", "commodity") else f"{base}-USD"
 
 
+def _remember(cache: dict, key: str, expires: datetime, value, now: datetime) -> None:
+    for stale in [k for k, (until, _) in cache.items() if until <= now]:
+        del cache[stale]
+    if len(cache) >= CACHE_LIMIT:
+        cache.pop(next(iter(cache)))
+    cache[key] = (expires, value)
+
+
 class TwelveDataProvider:
     name = "twelvedata"
     label = "Twelve Data (US stocks, forex, metals)"
     asset_classes = ("stock", "etf", "forex", "commodity")
 
-    def __init__(self, client: ProviderClient, credentials: Credentials):
+    def __init__(self, client: ProviderClient, credentials: Credentials, search_client: ProviderClient | None = None):
         self.client = client
+        self.search_client = search_client or client
         self._credentials = credentials
+        self._search_cache: dict[str, tuple[datetime, list[SymbolInfo]]] = {}
+        self._earliest_cache: dict[str, tuple[datetime, datetime]] = {}
 
     async def _key(self) -> str:
         """The API key; raises before any request is sent when it is missing."""
@@ -88,28 +128,30 @@ class TwelveDataProvider:
             raise PermanentError(KEY_MISSING)
         return key
 
-    async def _json(self, path: str, params: dict[str, str]) -> dict:
+    async def _json(self, path: str, params: dict[str, str], client: ProviderClient | None = None) -> dict:
         """GET and decode, turning error bodies (also inside HTTP 200) into domain errors. Raises NoData for empty ranges."""
-        response = await self.client.get(f"{BASE}{path}", params=params)
+        key = params.get("apikey", "")
         try:
-            data = response.json()
-        except ValueError:
-            data = None
-        if response.status_code != 200 or (isinstance(data, dict) and data.get("status") == "error"):
-            self._raise_for_error(response, data)
+            response = await (client or self.client).get(f"{BASE}{path}", params=params)
+            data = _body(response)
+            if response.status_code != 200 or (isinstance(data, dict) and data.get("status") == "error"):
+                self._raise_for_error(response, data)
+        except (PermanentError, TransientError) as exc:
+            if key and key in str(exc):
+                raise type(exc)(str(exc).replace(key, "***")) from None
+            raise
         if not isinstance(data, dict):
             raise TransientError("Twelve Data: unexpected response")
         return data
 
     def _raise_for_error(self, response: httpx.Response, data) -> None:
+        """Throttling never gets here: the client classifies it first (see _is_throttled)."""
         body = data if isinstance(data, dict) else {}
         try:
             code = int(body.get("code", response.status_code))
         except (TypeError, ValueError):
             code = response.status_code
         message = str(body.get("message", response.text))[:200]
-        if code in POLICY.throttle_statuses:
-            raise self.client.throttled(response, status=code)
         if code == 400 and "no data is available" in message.lower():
             raise NoData
         if code in POLICY.permanent_messages:
@@ -119,14 +161,17 @@ class TwelveDataProvider:
         raise PermanentError(f"Twelve Data: unexpected error {code}: {message}")
 
     async def search_symbols(self, query: str) -> list[SymbolInfo]:
-        if not query.strip():
+        query = query.strip()
+        if not query:
             return []
-        params = {"symbol": query.strip(), "outputsize": str(SEARCH_SIZE)}
-        key = (await self._credentials()).strip()  # search works without a key
-        if key:
-            params["apikey"] = key
+        now = self.search_client.clock.now()
+        cached = self._search_cache.get(query.lower())
+        if cached and cached[0] > now:
+            return cached[1]
         try:
-            data = await self._json("/symbol_search", params)
+            data = await self._json(
+                "/symbol_search", {"symbol": query, "outputsize": str(SEARCH_SIZE)}, self.search_client
+            )
         except NoData:
             return []
         rows = data.get("data")
@@ -150,19 +195,27 @@ class TwelveDataProvider:
             if row.get("exchange"):
                 name = f"{name} · {row['exchange']}"
             symbols[symbol] = SymbolInfo(symbol, asset_class, _jesse_symbol(symbol, asset_class), name)
-        return rank_matches(symbols.values(), query)
+        ranked = rank_matches(symbols.values(), query)
+        _remember(self._search_cache, query.lower(), now + SEARCH_TTL, ranked, now)
+        return ranked
 
     async def earliest_available(self, symbol: str) -> datetime:
         key = await self._key()
+        now = self.client.clock.now()
+        cached = self._earliest_cache.get(symbol)
+        if cached and cached[0] > now:
+            return cached[1]
         try:
             data = await self._json(
                 "/earliest_timestamp", {"symbol": symbol, "interval": "1min", "timezone": "UTC", "apikey": key}
             )
-            return datetime.fromtimestamp(int(data["unix_time"]), UTC)
+            earliest = datetime.fromtimestamp(int(data["unix_time"]), UTC)
         except (KeyError, TypeError, ValueError):
             raise PermanentError(f"Twelve Data: no earliest date for {symbol}") from None
         except NoData:
             raise PermanentError(f"Twelve Data: no data for {symbol}") from None
+        _remember(self._earliest_cache, symbol, now + EARLIEST_TTL, earliest, now)
+        return earliest
 
     def available_until(self, now: datetime) -> datetime:
         return floor_minute(now) - PUBLISH_LAG
@@ -181,6 +234,7 @@ class TwelveDataProvider:
                 "symbol": symbol,
                 "interval": "1min",
                 "start_date": cursor.astimezone(UTC).strftime(REQUEST_TIME_FORMAT),
+                # Verified live (2026-09-30): end_date is INCLUSIVE and, like start_date, is read in `timezone`.
                 "end_date": (window_end - MINUTE).astimezone(UTC).strftime(REQUEST_TIME_FORMAT),
                 "timezone": "UTC",
                 "order": "asc",
@@ -195,14 +249,15 @@ class TwelveDataProvider:
             if not isinstance(values, list):
                 raise TransientError(f"Twelve Data: unexpected response for {symbol}")  # retry; the cursor must not move
             try:
-                found = {
-                    ts: Candle(
-                        ts, float(v["open"]), float(v["high"]), float(v["low"]), float(v["close"]), float(v.get("volume") or 0.0)
-                    )
+                rows = [
+                    (_parse_time(v["datetime"]), float(v["open"]), float(v["high"]), float(v["low"]), float(v["close"]), float(v.get("volume") or 0.0))
                     for v in values
-                    if cursor <= (ts := _parse_time(v["datetime"])) < window_end
-                }
+                ]
             except (KeyError, TypeError, ValueError):
                 raise TransientError(f"Twelve Data: malformed candle for {symbol}") from None
+            if any(not cursor <= row[0] < window_end for row in rows):
+                # Never clip silently: it would hide a timezone or range misunderstanding and leave a permanent gap.
+                raise TransientError("Twelve Data: returned candles outside the requested window")
+            found = {row[0]: Candle(*row) for row in rows}
             yield Chunk([found[ts] for ts in sorted(found)], window_end)
             cursor = window_end
