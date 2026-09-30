@@ -160,6 +160,8 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 
 **3. Throttling means waiting, not failing.** On HTTP 429/418 (or 503 from Dukascopy), the client pauses **all** requests to that provider until `Retry-After` (or 60 s if absent, doubling on repeats up to 15 min). Affected jobs show status `waiting` with a message like "Binance rate limit, resuming 14:03:12". This never counts toward the job's error attempts.
 
+**Honest status.** The client remembers when the current streak of throttling responses began (any non-throttled response ends it). If the streak has lasted 5 minutes or more, the message changes to "Dukascopy unavailable since 14:00 UTC (HTTP 503), retrying at 14:09:30 UTC" so a provider that refuses everything is not presented as merely rate limited. Jobs in `waiting` or `paused` show no ETA, since nothing is being downloaded.
+
 **4. Transient errors retry automatically.** Network errors, timeouts and 5xx responses are retried 3 times within the request (backoff 2 s, 4 s, 8 s). If a request still fails, the job becomes `paused` and is re-queued with `next_attempt_at` after 1 min, 5 min, 15 min, 1 h, then hourly. After 24 h of consecutive failures without a successful chunk, the job becomes `failed`. Any successful chunk resets the counter. Candles already stored are always kept.
 
 **5. Permanent errors fail fast.** Bad or missing API key (401/403) and unknown symbol (400/404 or provider "invalid symbol") mark the job `failed` immediately with an actionable message such as "Alpaca API key rejected — check Settings". Other jobs keep running.

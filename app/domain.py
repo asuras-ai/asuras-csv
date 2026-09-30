@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 MINUTE = timedelta(minutes=1)
 HOUR = timedelta(hours=1)
+UNAVAILABLE_AFTER = timedelta(minutes=5)  # a throttle streak this long is reported as an outage
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,10 +49,18 @@ class PermanentError(ProviderError):
 class RateLimited(ProviderError):
     """The provider throttled us; nothing may be sent to it before resume_at."""
 
-    def __init__(self, provider: str, resume_at: datetime):
-        super().__init__(f"{provider} rate limit, resuming {resume_at:%H:%M:%S} UTC")
+    def __init__(self, provider: str, resume_at: datetime, *, since: datetime | None = None, status: int | None = None):
+        if since is None or resume_at - since < UNAVAILABLE_AFTER:
+            message = f"{provider} rate limit, resuming {resume_at:%H:%M:%S} UTC"
+        else:
+            message = (
+                f"{provider} unavailable since {since:%H:%M} UTC (HTTP {status}), retrying at {resume_at:%H:%M:%S} UTC"
+            )
+        super().__init__(message)
         self.provider = provider
         self.resume_at = resume_at
+        self.since = since  # start of the current run of throttling responses
+        self.status = status
 
 
 def utc(dt: datetime) -> datetime:

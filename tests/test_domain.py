@@ -38,3 +38,16 @@ async def test_fake_clock_sleep_advances_time():
     assert clock.monotonic() - mono == 1.5
     assert clock.now() - wall == timedelta(seconds=1.5)
     assert clock.sleeps == [1.5]
+
+
+def test_rate_limited_message_stays_short_for_a_brief_streak():
+    since = datetime(2024, 1, 1, 14, 0, tzinfo=UTC)
+    err = RateLimited("Binance", datetime(2024, 1, 1, 14, 3, 12, tzinfo=UTC), since=since, status=429)
+    assert str(err) == "Binance rate limit, resuming 14:03:12 UTC"
+
+
+def test_rate_limited_message_says_unavailable_after_a_long_streak():
+    since = datetime(2024, 1, 1, 14, 0, tzinfo=UTC)
+    err = RateLimited("Dukascopy", datetime(2024, 1, 1, 14, 9, 30, tzinfo=UTC), since=since, status=503)
+    assert str(err) == "Dukascopy unavailable since 14:00 UTC (HTTP 503), retrying at 14:09:30 UTC"
+    assert (err.since, err.status) == (since, 503)

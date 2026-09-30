@@ -178,3 +178,36 @@ async def test_concurrency_limit_is_respected(respx_mock, clock):
     await tasks
     assert calls == 2
     assert peak == 1
+
+
+async def test_persistent_throttling_reports_the_provider_as_unavailable(respx_mock, clock):
+    respx_mock.get(URL).mock(return_value=httpx.Response(503))
+    client = make_client(clock, throttle_statuses=frozenset({503}))
+    started = clock.now()
+    with pytest.raises(RateLimited) as first:
+        await client.get(URL)
+    assert first.value.since == started and first.value.status == 503
+    assert "rate limit" in str(first.value)
+    exc = first
+    for _ in range(3):  # each retry after the pause is refused again: 60 + 120 + 240 s
+        clock.advance((exc.value.resume_at - clock.now()).total_seconds())
+        with pytest.raises(RateLimited) as exc:
+            await client.get(URL)
+    assert exc.value.since == started
+    assert f"Test unavailable since {started:%H:%M} UTC (HTTP 503), retrying at" in str(exc.value)
+    with pytest.raises(RateLimited) as paused:  # raised from the pause check, not a new request
+        await client.get(URL)
+    assert paused.value.since == started and paused.value.status == 503
+
+
+async def test_a_successful_response_ends_the_throttle_streak(respx_mock, clock):
+    respx_mock.get(URL).mock(side_effect=[httpx.Response(429), httpx.Response(200), httpx.Response(429)])
+    client = make_client(clock)
+    with pytest.raises(RateLimited) as first:
+        await client.get(URL)
+    clock.advance(61)
+    await client.get(URL)
+    clock.advance(1000)
+    with pytest.raises(RateLimited) as again:
+        await client.get(URL)
+    assert first.value.since != again.value.since and again.value.since == clock.now()
