@@ -1,4 +1,4 @@
-"""User settings stored in the database; Alpaca and OANDA credentials from the environment take precedence."""
+"""User settings stored in the database; Alpaca, OANDA and Twelve Data credentials from the environment take precedence."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -21,6 +21,7 @@ DEFAULTS = {
     "alpaca_secret_key": "",
     "oanda_api_token": "",
     "oanda_environment": "practice",
+    "twelvedata_api_key": "",
 }
 
 
@@ -36,6 +37,8 @@ class AppSettings:
     oanda_environment: str = "practice"
     oanda_from_env: bool = False
     oanda_environment_from_env: bool = False
+    twelvedata_api_key: str = ""
+    twelvedata_from_env: bool = False
 
 
 def _validate(values: Mapping[str, str]) -> None:
@@ -71,6 +74,7 @@ class SettingsService:
         v = DEFAULTS | stored
         from_env = bool(self._env.alpaca_key_id and self._env.alpaca_secret_key)
         oanda_from_env = bool(self._env.oanda_api_token)
+        twelvedata_from_env = bool(self._env.twelvedata_api_key)
         env_environment = self._env.oanda_environment.strip().lower()
         return AppSettings(
             schedule_enabled=v["schedule_enabled"] == "true",
@@ -83,6 +87,8 @@ class SettingsService:
             oanda_environment=env_environment or v["oanda_environment"],  # an invalid env value is reported by the provider
             oanda_from_env=oanda_from_env,
             oanda_environment_from_env=bool(env_environment),
+            twelvedata_api_key=self._env.twelvedata_api_key if twelvedata_from_env else v["twelvedata_api_key"],
+            twelvedata_from_env=twelvedata_from_env,
         )
 
     async def save(self, values: Mapping[str, str]) -> None:
@@ -101,3 +107,6 @@ class SettingsService:
     async def oanda_credentials(self) -> tuple[str, str]:
         s = await self.load()
         return s.oanda_api_token, s.oanda_environment
+
+    async def twelvedata_credentials(self) -> str:
+        return (await self.load()).twelvedata_api_key

@@ -208,3 +208,32 @@ async def test_oanda_environment_from_env_is_read_only_while_the_token_stays_edi
     assert await SettingsService(sf, env).oanda_credentials() == ("TOK1", "live")
     async with sf() as s:
         assert (await s.scalars(select(Setting.key).where(Setting.key == "oanda_environment"))).all() == []
+
+
+async def test_twelvedata_key_is_masked_and_never_rendered(client, sf):
+    base = {"schedule_cron": "0 * * * *", "worker_concurrency": "2"}
+    r = await client.post("/settings", data=base | {"twelvedata_api_key": "td-abcdef-4321"})
+    assert r.status_code == 303
+    page = (await client.get("/settings")).text
+    assert "td-abcdef-4321" not in page and "•••• 4321" in page
+    assert 'name="twelvedata_api_key"' in page and "twelvedata.com" in page
+    # A blank key keeps the stored one.
+    r = await client.post("/settings", data=base | {"twelvedata_api_key": ""})
+    assert r.status_code == 303
+    svc = SettingsService(sf, EnvConfig(_env_file=None, database_url="postgresql+asyncpg://u@h/d"))
+    assert await svc.twelvedata_credentials() == "td-abcdef-4321"
+
+
+async def test_twelvedata_env_key_is_read_only(sf, clock):
+    env = EnvConfig(_env_file=None, database_url="postgresql+asyncpg://unused@localhost/unused", twelvedata_api_key="ENVKEY5678")
+    app = create_app(env, sf=sf, clock=clock, registry=ProviderRegistry([FakeProvider(clock)]), start_background=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+        page = (await c.get("/settings")).text
+        assert "ENVKEY5678" not in page and 'name="twelvedata_api_key"' not in page and "TWELVEDATA_API_KEY" in page
+        r = await c.post(
+            "/settings", data={"schedule_cron": "0 * * * *", "worker_concurrency": "2", "twelvedata_api_key": "OTHER"}
+        )
+        assert r.status_code == 303
+    assert await SettingsService(sf, env).twelvedata_credentials() == "ENVKEY5678"
+    async with sf() as s:
+        assert (await s.scalars(select(Setting.key).where(Setting.key.like("twelvedata_%")))).all() == []
