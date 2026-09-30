@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "_macros.html" import job_status %}
+{% block content %}
+<h2>Jobs</h2>
+<div class="overflow-auto">
+<table class="striped">
+  <thead>
+    <tr>
+      <th>#</th><th>Asset</th><th>Kind</th><th>Status</th><th>Range (UTC)</th><th>Requests</th>
+      <th>Candles added</th><th>Run time</th><th>Created</th><th>Finished</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.job.id }}</td>
+      <td>{{ row.asset.jesse_symbol }}</td>
+      <td>{{ row.job.kind }}</td>
+      <td>{{ job_status(row.job, row.progress) }}</td>
+      <td>{{ row.job.range_start|dt }} → {{ row.job.range_end|dt }}</td>
+      <td>{{ "{:,}".format(row.job.requests_made) }}</td>
+      <td>{{ "{:,}".format(row.job.candles_added) }}</td>
+      <td>{{ row.job.run_seconds|duration }}</td>
+      <td>{{ row.job.created_at|dt }}</td>
+      <td>{{ row.job.finished_at|dt }}</td>
+      <td class="actions">
+        {% if row.job.status in active_statuses %}
+        <form method="post" action="/jobs/{{ row.job.id }}/cancel">
+          <input type="hidden" name="next" value="/jobs">
+          <button class="secondary outline">Cancel</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="11">No jobs yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

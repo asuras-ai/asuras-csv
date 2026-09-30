@@ -1,0 +1,21 @@
+{% from "_macros.html" import job_status %}
+{% for row in rows %}
+<tr>
+  <td>{{ row.asset.jesse_symbol }}{% if not row.asset.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
+  <td>{{ row.provider_label }}<br><span class="muted">{{ row.asset.provider_symbol }}</span></td>
+  <td>{{ row.asset.asset_class }}</td>
+  <td>{{ row.stats.first|dt }}</td>
+  <td>{{ row.stats.last|dt }}</td>
+  <td>{{ "{:,}".format(row.stats.count) }}</td>
+  <td>{{ row.asset.fetched_until|dt }}</td>
+  <td>{{ job_status(row.job, row.progress) }}</td>
+  <td class="actions">
+    <form method="post" action="/assets/{{ row.asset.id }}/update"><button>Update</button></form>
+    <a href="/assets/{{ row.asset.id }}/export" role="button" class="secondary">Export</a>
+    <a href="/assets/{{ row.asset.id }}/edit" role="button" class="secondary outline">Edit</a>
+    <a href="/assets/{{ row.asset.id }}/delete" role="button" class="contrast outline">Delete</a>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="9">No assets yet. <a href="/assets/new">Add one</a>.</td></tr>
+{% endfor %}

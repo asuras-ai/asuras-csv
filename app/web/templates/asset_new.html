@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Add asset</h2>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/assets">
+  <label>Provider
+    <select name="search_provider" hx-get="/assets/search" hx-target="#results" hx-include="[name=q]" hx-trigger="change">
+      {% for p in providers %}<option value="{{ p.name }}">{{ p.label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Search symbol
+    <input type="search" name="q" placeholder="e.g. BTCUSDT, AAPL, EURUSD" autocomplete="off" hx-on:keydown="if(event.key==='Enter'){event.preventDefault()}"
+           hx-get="/assets/search" hx-trigger="input changed delay:300ms, search"
+           hx-target="#results" hx-include="[name=search_provider]">
+  </label>
+  <div id="results"></div>
+  <div id="details"></div>
+</form>
+{% endblock %}

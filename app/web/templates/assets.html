@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Assets</h2>
+<div class="toolbar">
+  <a href="/assets/new" role="button">Add asset</a>
+  <form method="post" action="/assets/update-all"><button class="secondary">Update all</button></form>
+</div>
+<div class="overflow-auto">
+<table class="striped">
+  <thead>
+    <tr>
+      <th>Jesse symbol</th><th>Provider</th><th>Class</th><th>First candle</th><th>Last candle</th>
+      <th>Candles</th><th>Fetched until</th><th>Status</th><th>Actions</th>
+    </tr>
+  </thead>
+  <tbody hx-get="/assets/rows" hx-trigger="every 2s" hx-swap="innerHTML">
+    {% include "_asset_rows.html" %}
+  </tbody>
+</table>
+</div>
+<p class="muted">Times are UTC. Candle counts refresh every couple of minutes.</p>
+{% endblock %}

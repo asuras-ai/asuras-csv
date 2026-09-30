@@ -1,0 +1,13 @@
+{% if error %}<p class="error">{{ error }}</p>
+{% elif symbols %}
+<ul>
+  {% for s in symbols %}
+  <li>
+    <a href="#" hx-get="/assets/new/details" hx-target="#details"
+       hx-vals='{{ {"provider": provider, "symbol": s.provider_symbol, "asset_class": s.asset_class, "jesse_symbol": s.suggested_jesse_symbol}|tojson }}'>{{ s.provider_symbol }}</a>
+    <span class="muted">{{ s.name }} · {{ s.asset_class }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% elif q %}<p class="muted">No matches.</p>
+{% endif %}

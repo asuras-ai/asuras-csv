@@ -7,7 +7,7 @@
 
 A self-hosted tool, run with `docker compose`, with a web GUI to download 1-minute OHLCV candles for crypto, stocks, ETFs and forex into a database. Updates download only candles newer than the last stored one. Any asset can be exported as a CSV in the Jesse "Custom Data" format (https://docs.jesse.trade/docs/traditional-markets/importing-data#custom-data-csv).
 
-Single user, runs on a local machine or LAN, no authentication.
+Single user, runs on a local machine or LAN, no authentication. The app has no login, so a small middleware rejects state-changing requests (POST/PUT/PATCH/DELETE) that a browser marks `Sec-Fetch-Site: cross-site` or whose `Origin` host differs from `Host`; requests with neither header (curl, tests) pass. Keep it off the public internet.
 
 Free APIs have rate limits, and years of 1m history take thousands of requests. The user never has to manage this. They add an asset and walk away. The app splits the download into small requests, paces them to each provider's limits, waits out throttling, resumes after restarts or network outages, and shows progress with an ETA (see **Rate Limits and Long Downloads**).
 
@@ -68,7 +68,8 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 | status_detail | human-readable reason for `waiting`/`paused`, e.g. "Alpaca rate limit, resuming 14:03:12" |
 | next_attempt_at | when a `waiting`/`paused` job becomes eligible again |
 | attempt | consecutive failed attempts (reset after any successful chunk) |
-| last_progress_at | time of the last successful chunk (set at creation); drives the 24 h give-up rule |
+| last_progress_at | time of the last successful chunk; also reset whenever a job with `attempt = 0` is claimed, so the 24 h give-up rule counts from when the job last ran, not from queueing |
+| queued_at | when the job last entered the queue (set at creation and on every slice requeue); claim order is `priority DESC, queued_at, id` |
 | run_seconds | accumulated time spent running; used for the measured request rate |
 | error | last error message |
 | created_at, started_at, finished_at | |
@@ -88,7 +89,7 @@ class Provider(Protocol):
     asset_classes: set[str]
     async def search_symbols(self, query: str) -> list[SymbolInfo]
     async def earliest_available(self, symbol: str) -> datetime
-    def available_until(self, now: datetime) -> datetime   # latest safely-final minute
+    def available_until(self, now: datetime) -> datetime   # latest safely-final minute (includes each provider's publish lag)
     def estimate_requests(self, start: datetime, end: datetime) -> int
     async def fetch(self, symbol: str, start: datetime, end: datetime
                     ) -> AsyncIterator[Chunk]   # ascending chunks, one per request/file
@@ -103,7 +104,7 @@ class Provider(Protocol):
 - Symbol list from `/api/v3/exchangeInfo` (cached). Jesse symbol = `baseAsset-quoteAsset`.
 - Earliest available: first kline returned from `startTime=0`.
 - Rate limit: 6000 request weight/min per IP; a 1000-candle kline request costs weight 2. `X-MBX-USED-WEIGHT-1M` is read after every response. HTTP 429/418 carry `Retry-After`.
-- `available_until` = now floored to the minute.
+- `available_until` = now floored to the minute, minus a 2-minute publish lag (`PUBLISH_LAG`), so the cursor never passes unpublished data.
 
 ### Alpaca (stocks, ETFs)
 - `GET /v2/stocks/{symbol}/bars?timeframe=1Min&feed=iex&limit=10000`, follows `next_page_token`. Requires a free API key.
@@ -113,7 +114,7 @@ class Provider(Protocol):
 - Earliest available: 2016-01-01 (IEX feed history start). A request whose range starts before a symbol's first bar simply returns that first bar, so pre-listing years cost no extra requests.
 - Rate limit: 200 requests/min on the free plan. `X-RateLimit-Remaining` / `X-RateLimit-Reset` are read after every response.
 - `covered_until` = timestamp after the last bar of the page, or the request `end` once `next_page_token` is empty.
-- `available_until` = now floored to the minute.
+- `available_until` = now floored to the minute, minus a 2-minute publish lag (`PUBLISH_LAG`), so the cursor never passes unpublished data.
 - Note: the free IEX feed only covers IEX exchange trades, so volume is lower than consolidated volume and some thinly traded minutes have no bar. The feed is a single constant in the adapter, so it can be switched to `sip` if a paid plan is added later.
 
 ### Dukascopy (forex)
@@ -122,7 +123,7 @@ class Provider(Protocol):
 - Missing or empty hour files (weekends, holidays) produce no candles.
 - No published rate limit. The app self-throttles to 4 in-flight downloads and 8 files/s, and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 10–15 min per year of history per pair).
 - Each hour file yields one `Chunk` with `covered_until` = end of that hour.
-- `available_until` = start of the previous UTC hour. The current hour's file is not final, and the last finished hour is often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
+- `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
 
 ## Update Logic
@@ -165,7 +166,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 
 **6. Restarts resume.** On startup, jobs left `running` or `waiting` return to `queued` and continue from `fetched_until`. `paused` jobs keep their `next_attempt_at`. Stopping the container, rebooting the host or a crash just pauses downloads.
 
-**7. Fair scheduling.** A backfill job works in **slices**: after about 60 s of work it commits and returns itself to the queue. Workers always pick the highest-priority eligible job (`updates` before `backfills`, then oldest `created_at`). Short updates never wait behind a multi-hour Dukascopy backfill, and several backfills share the providers in round-robin.
+**7. Fair scheduling.** Every job (backfill or update) works in **slices**: after about 60 s of work it commits and returns itself to the queue with a fresh `queued_at`. Workers pick the highest-priority eligible job (`updates` before `backfills`), then the oldest `queued_at`. Short updates never wait behind a multi-hour Dukascopy backfill, and several jobs share the providers in round-robin.
 
 **8. Visibility.** Progress and ETA come from the cursor. ETA = `estimate_requests(fetched_until, range_end)` divided by the job's measured average rate (`requests_made / run_seconds`) once it has made 20 requests, and by the policy budget before that. The Add Asset form shows an estimate before saving, e.g. "≈ 2,600 requests, about 2 minutes" or "≈ 120,000 files, about 4 hours".
 
@@ -174,7 +175,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 - An in-process async worker pool with `worker_concurrency` workers (default 3). Workers take the highest-priority eligible job (`queued`, or `waiting`/`paused` with `next_attempt_at <= now`), using `SELECT ... FOR UPDATE SKIP LOCKED`.
 - At most one active (not `done`/`failed`/`cancelled`) job per asset. Requesting another returns the existing job. An active backfill already runs to `range_end`, and the next update continues from its cursor.
 - Retry, throttling, restart and slicing behaviour are specified in **Rate Limits and Long Downloads**.
-- Adding an asset queues a `backfill` job. Update buttons and scheduled runs queue `update` jobs. Both kinds run the same update logic and differ only in priority and slicing.
+- Adding an asset queues a `backfill` job. Update buttons and scheduled runs queue `update` jobs. Both kinds run the same update logic and differ only in priority.
 - The UI can cancel an active job. Stored candles and the cursor are kept, so a later update continues from there.
 
 ## Scheduler
