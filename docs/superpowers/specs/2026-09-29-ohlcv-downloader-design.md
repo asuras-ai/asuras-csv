@@ -77,7 +77,7 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 Progress is `(assets.fetched_until − range_start) / (range_end − range_start)`.
 
 ### `settings`
-Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`. Environment variables override DB values for the Alpaca keys and the OANDA token ; `OANDA_ENVIRONMENT`, when non-empty, overrides `oanda_environment` independently of the token.
+Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`. Environment variables override DB values for the Alpaca keys and the OANDA token; `OANDA_ENVIRONMENT`, when non-empty, overrides `oanda_environment` independently of the token.
 
 ## Providers
 
@@ -121,7 +121,7 @@ class Provider(Protocol):
 - Free hourly tick files: `https://datafeed.dukascopy.com/datafeed/{PAIR}/{YYYY}/{MM-1:02d}/{DD:02d}/{HH:02d}h_ticks.bi5` (LZMA-compressed; 20-byte big-endian records: ms offset, ask, bid, ask vol, bid vol; prices scaled by point size, 1e5 or 1e3 for JPY pairs).
 - Aggregated into 1m **bid** candles. Volume = tick count in the minute.
 - Missing or empty hour files (weekends, holidays) produce no candles.
-- No published rate limit. The app self-throttles to 2 in-flight downloads and 2 files/s (kept low because Dukascopy blocks fast clients), and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 1 hour or more per year (about 7,500 files a year at 2/s) of history per pair).
+- No published rate limit. The app self-throttles to 2 in-flight downloads and 2 files/s (kept low because Dukascopy blocks fast clients), and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 1 hour or more per year of history per pair, roughly 7,500 files at 2/s).
 - Each hour file yields one `Chunk` with `covered_until` = end of that hour.
 - `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
 - Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
@@ -133,7 +133,7 @@ class Provider(Protocol):
 - Symbols: `GET /v3/accounts`, then `GET /v3/accounts/{id}/instruments` of the first account, cached per (token, environment). An empty or malformed accounts/instruments response is a permanent error ("no accounts found for this token", "no instruments found for this account"). Types CURRENCY, METAL, CFD map to classes forex, metal, cfd. Jesse symbol = name with `_` replaced by `-` (`EUR-USD`, `XAU-USD`, `US30-USD`). Search ignores `_`, `-` and `/`.
 - `earliest_available`: one request from 2000-01-01 with `count=1`; the first candle's time.
 - `available_until` = current minute minus a 2-minute lag (`PUBLISH_LAG`). `estimate_requests` = ceil(minutes / 4999).
-- Budget: OANDA allows 120 requests/s per IP and answers 429 beyond it. The app uses 20 req/s with 2 in flight. There are no quota headers. Errors 400/401/403/404 are permanent; 429 is throttling.
+- Budget: OANDA allows 120 requests/s per IP and answers 429 beyond it. The app uses 20 req/s with 2 in flight. There are no quota headers. A malformed candles response is a transient error (the job retries and the cursor does not move). Errors 400/401/403/404 are permanent; 429 is throttling.
 
 ## Update Logic
 

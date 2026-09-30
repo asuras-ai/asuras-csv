@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.domain import PermanentError
+from app.domain import PermanentError, TransientError
 from app.providers.oanda import PAGE, POLICY, PUBLISH_LAG, OandaProvider
 from app.providers.http import ProviderClient
 
@@ -233,14 +233,19 @@ async def test_search_cache_is_keyed_by_token_and_environment(respx_mock, clock)
     assert live_accounts.call_count == 1 and live_instruments.call_count == 1
 
 
-@pytest.mark.parametrize("body", [{}, {"accounts": []}, {"accounts": [{"tags": []}]}, {"accounts": None}, []])
+@pytest.mark.parametrize(
+    "body", [{}, {"accounts": []}, {"accounts": [{"tags": []}]}, {"accounts": None}, [], [1], "x", {"accounts": ["x"]}, {"accounts": "x"}]
+)
 async def test_search_without_accounts_is_a_clear_permanent_error(respx_mock, clock, body):
     respx_mock.get(host=HOST, path="/v3/accounts").mock(return_value=httpx.Response(200, json=body))
     with pytest.raises(PermanentError, match="OANDA: no accounts found for this token"):
         await make_provider(clock).search_symbols("eur")
 
 
-@pytest.mark.parametrize("body", [{}, {"instruments": []}, {"instruments": None}, [], {"instruments": [{"type": "CFD"}]}])
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"instruments": []}, {"instruments": None}, [], {"instruments": [{"type": "CFD"}]}, {"instruments": [None, "x"]}, "x"],
+)
 async def test_search_without_instruments_is_a_clear_permanent_error(respx_mock, clock, body):
     respx_mock.get(host=HOST, path="/v3/accounts").mock(return_value=httpx.Response(200, json={"accounts": [{"id": ACCOUNT}]}))
     respx_mock.get(host=HOST, path=f"/v3/accounts/{ACCOUNT}/instruments").mock(return_value=httpx.Response(200, json=body))
@@ -248,7 +253,11 @@ async def test_search_without_instruments_is_a_clear_permanent_error(respx_mock,
         await make_provider(clock).search_symbols("eur")
 
 
-async def test_candle_response_without_candles_is_an_error_not_an_empty_window(respx_mock, clock):
-    respx_mock.get(host=HOST, path="/v3/instruments/EUR_USD/candles").mock(return_value=httpx.Response(200, json={}))
-    with pytest.raises(PermanentError, match="unexpected response"):
+@pytest.mark.parametrize("body", [{}, {"candles": None}, {"candles": "x"}, [], "x"])
+async def test_malformed_candle_response_is_transient_so_the_cursor_does_not_move(respx_mock, clock, body):
+    respx_mock.get(host=HOST, path="/v3/instruments/EUR_USD/candles").mock(return_value=httpx.Response(200, json=body))
+    with pytest.raises(TransientError, match="unexpected response"):
         await collect(make_provider(clock), T0, T0 + timedelta(minutes=5))
+    respx_mock.get(host=HOST, path="/v3/instruments/EUR_USD/candles").mock(return_value=httpx.Response(200, json=body))
+    with pytest.raises(TransientError):
+        await make_provider(clock).earliest_available("EUR_USD")

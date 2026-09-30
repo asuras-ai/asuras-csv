@@ -5,7 +5,7 @@ import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 
-from app.domain import MINUTE, Candle, Chunk, PermanentError, SymbolInfo, floor_minute, utc
+from app.domain import MINUTE, Candle, Chunk, PermanentError, SymbolInfo, TransientError, floor_minute, utc
 from app.providers.base import rank_matches
 from app.providers.http import ProviderClient, RateLimitPolicy
 
@@ -73,8 +73,10 @@ class OandaProvider:
     async def search_symbols(self, query: str) -> list[SymbolInfo]:
         auth = await self._auth()
         if self._symbols is None or self._symbols_key != auth:
-            accounts = (await self._request(auth, "/v3/accounts") or {}).get("accounts")
-            account_id = accounts[0].get("id") if isinstance(accounts, list) and accounts else None
+            data = await self._request(auth, "/v3/accounts")
+            accounts = data.get("accounts") if isinstance(data, dict) else None
+            first = accounts[0] if isinstance(accounts, list) and accounts else None
+            account_id = first.get("id") if isinstance(first, dict) else None
             if not account_id:
                 raise PermanentError("OANDA: no accounts found for this token")
             data = await self._request(auth, f"/v3/accounts/{account_id}/instruments")
@@ -86,8 +88,8 @@ class OandaProvider:
                     suggested_jesse_symbol=i["name"].replace("_", "-").upper(),
                     name=i.get("displayName") or i["name"],
                 )
-                for i in instruments or []
-                if i.get("name") and i.get("type") in ASSET_CLASSES
+                for i in (instruments if isinstance(instruments, list) else [])
+                if isinstance(i, dict) and i.get("name") and i.get("type") in ASSET_CLASSES
             ]
             if not symbols:
                 raise PermanentError("OANDA: no instruments found for this account")
@@ -137,5 +139,5 @@ class OandaProvider:
             await self._auth(), f"/v3/instruments/{symbol}/candles", {"granularity": "M1", "price": "B"} | params
         )
         if not isinstance(data, dict) or not isinstance(data.get("candles"), list):
-            raise PermanentError(f"OANDA: unexpected response for {symbol}")
+            raise TransientError(f"OANDA: unexpected response for {symbol}")  # retry; the cursor must not move
         return data

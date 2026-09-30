@@ -78,8 +78,8 @@ class ProviderClient:
                 status = response.status_code
                 if status in self.policy.throttle_statuses:
                     raise self._throttle(response)
-                self._throttle_seconds = DEFAULT_THROTTLE_SECONDS
-                if not self._pause_active(self._clock.now()):  # a stale success must not end the streak
+                if not self._pause_active(self._clock.now()):  # a stale success must not end the streak or the backoff
+                    self._throttle_seconds = DEFAULT_THROTTLE_SECONDS
                     self._throttled_since = None
                 self._apply_quota(response)
                 if status in self.policy.ok_statuses:
@@ -117,7 +117,8 @@ class ProviderClient:
 
     def _throttle(self, response: httpx.Response) -> RateLimited:
         now = self._clock.now()
-        if self._throttled_since is None:
+        idle = self._paused_until is not None and now - self._paused_until > timedelta(seconds=DEFAULT_THROTTLE_SECONDS)
+        if self._throttled_since is None or idle:  # idle: nobody finished the old streak, so start a new one
             self._throttled_since = now
         self._throttle_status = response.status_code
         pause_active = self._pause_active(now)
