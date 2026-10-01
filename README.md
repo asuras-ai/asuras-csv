@@ -61,6 +61,12 @@ exchange **Custom Data** and the asset's Jesse symbol (e.g. `BTC-USDT`, `AAPL-US
 Jesse CSV per asset (same files as single exports; assets without data are skipped). The API is
 `GET /export.zip?ids=1&ids=2&start=YYYY-MM-DD&end=YYYY-MM-DD`.
 
+## Charts
+
+Click **Chart** on an asset for a candlestick chart with volume and range buttons (1D, 1W, 1M, 6M, 1Y, All; ending at
+the last stored candle). Bars are aggregated in the database (at most about 2000). The chart library (TradingView
+Lightweight Charts) is loaded from a CDN, like Pico and HTMX.
+
 ## Development
 
 ```bash

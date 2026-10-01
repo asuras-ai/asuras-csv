@@ -17,6 +17,7 @@ from app.services import assets as asset_service
 from app.services import jobs
 from app.services.assets import EMPTY_STATS, AssetStats
 from app.services.export import day_bounds, export_filename, export_range, stream_csv
+from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
 from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import JobProgress, estimate_text, format_duration, job_progress
 
@@ -254,6 +255,21 @@ async def export_csv(request: Request, asset_id: int, start: str | None = None, 
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/assets/{asset_id}/chart", response_class=HTMLResponse)
+async def chart_page(request: Request, asset_id: int):
+    asset = await _asset_or_404(services(request), asset_id)
+    context = {"asset": asset, "ranges": list(RANGES), "default_range": DEFAULT_RANGE}
+    return templates.TemplateResponse(request, "chart.html", context)
+
+
+@router.get("/assets/{asset_id}/candles.json")
+async def candles_json(request: Request, asset_id: int, range: Annotated[str, Query(pattern="^(1D|1W|1M|6M|1Y|All)$")] = DEFAULT_RANGE):
+    svc = services(request)
+    await _asset_or_404(svc, asset_id)
+    bucket, candles = await candles_for_chart(svc.sf, asset_id, range)
+    return {"interval": interval_label(bucket), "candles": candles}
 
 
 @router.get("/export.zip")
