@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -12,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from app.clock import Clock
 from app.db import SessionFactory
 from app.models import ACTIVE_STATUSES, Asset, CandleRow, Job
+
+log = logging.getLogger(__name__)
 
 JESSE_SYMBOL = re.compile(r"^[A-Z0-9]+-[A-Z0-9]+$")
 
@@ -93,55 +96,85 @@ EMPTY_STATS = AssetStats(None, None, 0)
 class StatsCache:
     """Counting candles scans the whole table, so results are reused for `ttl_seconds`.
 
-    Refreshes are single-flight: concurrent callers share one query. When an expired value exists it is served
-    immediately while the refresh runs in the background; only the first-ever (or invalidated) load waits.
+    - Single-flight: at most ONE load runs at a time. Concurrent callers share it.
+    - `invalidate()` only marks the value expired. Later gets keep serving the stale value while one refresh runs;
+      only the first-ever load (or one after `clear()`) makes a caller wait. An invalidation that lands while a
+      load is running sets a dirty flag, so exactly one more load follows it (no parallel loads, no storm).
+    - `clear()` also drops the value, so the next get blocks on a fresh load. Use it only where a stale value
+      would be wrong. Nothing needs it today: after delete_asset a stale entry is harmless because rows for
+      missing assets are never rendered, so the delete route just calls `invalidate()`.
+    - A refresh that raises is logged as a warning; the value stays expired so the next get retries.
     """
 
-    def __init__(self, clock: Clock | None, ttl_seconds: float = 30.0):
+    def __init__(self, clock: Clock | None, ttl_seconds: float = 120.0):
         self._clock = clock
         self._ttl = ttl_seconds
         self._value: dict[int, AssetStats] | None = None
-        self._loaded_at = 0.0
-        self._generation = 0
-        self._inflight: tuple[int, asyncio.Task] | None = None
+        self._loaded_at = float("-inf")
+        self._generation = 0  # bumped by invalidate() and clear()
+        self._epoch = 0  # bumped by clear(): a load started before it must not store its result
+        self._dirty = False
+        self._task: asyncio.Task | None = None
 
     def invalidate(self) -> None:
         self._generation += 1
+        self._loaded_at = float("-inf")
+        if self._task is not None and not self._task.done():
+            self._dirty = True
+
+    def clear(self) -> None:
+        self.invalidate()
+        self._epoch += 1
         self._value = None
 
     def _now(self) -> float:
         return self._clock.monotonic() if self._clock else 0.0
 
-    async def _load(self, sf: SessionFactory, generation: int) -> dict[int, AssetStats]:
+    async def _load(self, sf: SessionFactory) -> dict[int, AssetStats]:
         started = self._now()
+        generation, epoch = self._generation, self._epoch
+        value = await self._load_uncached(sf)
+        if epoch == self._epoch:
+            self._value = value
+            # Invalidated mid-load: keep the value (better than nothing) but leave it expired.
+            if generation == self._generation:
+                self._loaded_at = started
+        return value
+
+    def _refresh(self, sf: SessionFactory) -> asyncio.Task:
+        if self._task is not None and not self._task.done():
+            return self._task
+        self._dirty = False
+        task = asyncio.create_task(self._load(sf), name="stats-refresh")
+        task.add_done_callback(lambda t: self._finished(sf, t))
+        self._task = task
+        return task
+
+    def _finished(self, sf: SessionFactory, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()  # always retrieved, so asyncio never reports it as unretrieved
+        if exc is not None:
+            log.warning("stats refresh failed; will retry on the next request", exc_info=exc)
+            return
+        if self._dirty and self._task is task:
+            self._refresh(sf)  # exactly one coalesced follow-up for all invalidations that landed mid-load
+
+    async def get(self, sf: SessionFactory) -> dict[int, AssetStats]:
+        if self._clock is None:
+            return await self._load_uncached(sf)
+        while True:
+            if self._value is not None:
+                if self._now() - self._loaded_at > self._ttl:
+                    self._refresh(sf)
+                return self._value
+            await asyncio.shield(self._refresh(sf))
+
+    async def _load_uncached(self, sf: SessionFactory) -> dict[int, AssetStats]:
         async with sf() as s:
             rows = await s.execute(
                 select(CandleRow.asset_id, func.min(CandleRow.ts), func.max(CandleRow.ts), func.count()).group_by(
                     CandleRow.asset_id
                 )
             )
-            value = {asset_id: AssetStats(first, last, count) for asset_id, first, last, count in rows}
-        if generation == self._generation and self._clock is not None:
-            self._value = value  # invalidated mid-load: serve it once, but do not cache it as fresh
-            self._loaded_at = started
-        return value
-
-    def _refresh(self, sf: SessionFactory) -> asyncio.Task:
-        if self._inflight is not None:
-            generation, task = self._inflight
-            if generation == self._generation and not task.done():
-                return task
-        generation = self._generation
-        task = asyncio.create_task(self._load(sf, generation), name="stats-refresh")
-        task.add_done_callback(lambda t: t.cancelled() or t.exception())  # never leave an unretrieved exception
-        self._inflight = (generation, task)
-        return task
-
-    async def get(self, sf: SessionFactory) -> dict[int, AssetStats]:
-        if self._value is not None and self._clock is not None:
-            if self._now() - self._loaded_at <= self._ttl:
-                return self._value
-            stale = self._value
-            self._refresh(sf)
-            return stale
-        return await asyncio.shield(self._refresh(sf))
+            return {asset_id: AssetStats(first, last, count) for asset_id, first, last, count in rows}

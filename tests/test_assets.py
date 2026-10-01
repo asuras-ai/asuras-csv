@@ -68,10 +68,12 @@ async def test_stats_are_cached_until_ttl_or_invalidation(sf, clock):
     assert (await cache.get(sf))[asset.id].count == 3
     clock.advance(61)
     assert (await cache.get(sf))[asset.id].count == 3  # expired: stale value now, refresh in the background
-    await cache._inflight[1]
+    await _idle(cache)
     assert (await cache.get(sf))[asset.id].count == 4
     await seed(sf, asset.id, [4])
     cache.invalidate()
+    assert (await cache.get(sf))[asset.id].count == 4  # invalidate() expires: stale value served, refresh runs
+    await _idle(cache)
     assert (await cache.get(sf))[asset.id].count == 5
 
 
@@ -159,32 +161,6 @@ async def test_delete_asset_does_not_deadlock_with_sync_commit_chunk(sf):
     assert await StatsCache(None).get(sf) == {}
 
 
-async def test_stats_invalidated_mid_load_is_not_cached_as_fresh(sf, clock):
-    asset = await make_asset(sf)
-    await seed(sf, asset.id, [0])
-    cache = StatsCache(clock, ttl_seconds=60)
-
-    class InvalidatingSession:
-        def __init__(self, session):
-            self._session = session
-
-        async def __aenter__(self):
-            self._inner = await self._session.__aenter__()
-            return self
-
-        async def __aexit__(self, *exc):
-            return await self._session.__aexit__(*exc)
-
-        async def execute(self, *args, **kwargs):
-            result = await self._inner.execute(*args, **kwargs)
-            cache.invalidate()  # invalidation lands while the load is in flight
-            return result
-
-    await cache.get(lambda: InvalidatingSession(sf()))
-    await seed(sf, asset.id, [1])
-    assert (await cache.get(sf))[asset.id].count == 2  # reloaded, stale result was not stored
-
-
 class CountingSessionFactory:
     """Wraps a session factory, counting sessions and optionally pausing inside the query."""
 
@@ -252,5 +228,82 @@ async def test_expired_value_is_served_stale_while_one_refresh_runs(sf, clock):
     assert counting.opened == 1
 
 
-async def test_default_ttl_is_30_seconds():
-    assert StatsCache(None)._ttl == 30.0
+async def test_default_ttl_is_120_seconds():
+    assert StatsCache(None)._ttl == 120.0
+
+
+async def _idle(cache):
+    import asyncio
+
+    while cache._task is not None and not cache._task.done():
+        await asyncio.wait([cache._task])
+    await asyncio.sleep(0.05)  # lets the done-callback start a coalesced follow-up load
+    while cache._task is not None and not cache._task.done():
+        await asyncio.wait([cache._task])
+
+
+async def test_many_invalidations_during_a_load_cause_at_most_one_more_load(sf, clock):
+    import asyncio
+
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0])
+    gate = asyncio.Event()
+    counting = CountingSessionFactory(sf, gate)
+    cache = StatsCache(clock, ttl_seconds=60)
+    first = asyncio.create_task(cache.get(counting))
+    await asyncio.sleep(0.05)
+    for _ in range(10):
+        cache.invalidate()
+        await asyncio.sleep(0)
+    gate.set()
+    await first
+    await _idle(cache)
+    assert counting.opened == 2
+    assert (await cache.get(counting))[asset.id].count == 1
+    await _idle(cache)
+    assert counting.opened == 2
+
+
+async def test_invalidate_serves_stale_value_and_refreshes_in_background(sf, clock):
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0])
+    cache = StatsCache(clock, ttl_seconds=60)
+    assert (await cache.get(sf))[asset.id].count == 1
+    await seed(sf, asset.id, [1])
+    cache.invalidate()
+    assert (await cache.get(sf))[asset.id].count == 1  # stale, not a blocking reload
+    await _idle(cache)
+    assert (await cache.get(sf))[asset.id].count == 2
+
+
+async def test_clear_forces_a_blocking_reload(sf, clock):
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0])
+    cache = StatsCache(clock, ttl_seconds=60)
+    await cache.get(sf)
+    await seed(sf, asset.id, [1])
+    cache.clear()
+    assert (await cache.get(sf))[asset.id].count == 2
+
+
+async def test_failed_refresh_is_logged_and_next_get_retries(sf, clock, caplog):
+    import logging
+
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0])
+    cache = StatsCache(clock, ttl_seconds=60)
+    await cache.get(sf)
+    cache.invalidate()
+
+    def broken():
+        raise RuntimeError("db down")
+
+    with caplog.at_level(logging.WARNING, logger="app.services.assets"):
+        assert (await cache.get(broken))[asset.id].count == 1  # stale value still served
+        await _idle(cache)
+    assert any("stats refresh failed" in r.getMessage() for r in caplog.records)
+    counting = CountingSessionFactory(sf)
+    await cache.get(counting)
+    await _idle(cache)
+    assert counting.opened == 1  # retried
+    assert (await cache.get(counting))[asset.id].count == 1

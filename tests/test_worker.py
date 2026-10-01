@@ -183,7 +183,7 @@ async def test_stop_is_bounded_when_a_claim_hangs(sf, monkeypatch):
     assert time.monotonic() - t0 < 1
 
 
-async def test_on_progress_called_after_finish_fail_and_requeue(sf, clock):
+async def test_on_progress_called_after_finish_and_fail(sf, clock):
     calls = []
     registry = ProviderRegistry([FakeProvider(clock)])
     asset = await make_asset(sf)
@@ -198,11 +198,11 @@ async def test_on_progress_called_after_finish_fail_and_requeue(sf, clock):
     assert calls == ["done", "failed"]
 
 
-async def test_on_progress_called_when_a_backfill_slice_yields(sf, clock):
+async def test_on_progress_not_called_when_a_backfill_slice_yields(sf, clock):
     calls = []
     registry = ProviderRegistry([FakeProvider(clock, seconds_per_chunk=25)])
     asset = await make_asset(sf)
     await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
     job = await run_one(Worker(sf, registry, clock, slice_seconds=60, on_progress=lambda: calls.append(1)), sf, clock)
     assert job.status == "queued"
-    assert calls == [1]
+    assert calls == []

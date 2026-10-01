@@ -138,5 +138,5 @@ class Worker:
                 await self._settle(jobs.finish, self._sf, self._clock, job_id, elapsed())
                 self._notify()
             elif outcome is SliceOutcome.YIELDED:
+                # No notify: stats only change visibly when a job ends, and a slice yield would trigger a full scan.
                 await self._settle(jobs.requeue, self._sf, self._clock, job_id, elapsed())
-                self._notify()
