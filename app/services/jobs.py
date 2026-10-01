@@ -1,9 +1,10 @@
 """Job queue stored in the `jobs` table: creation, claiming and state transitions."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import IntegrityError
 
@@ -11,6 +12,8 @@ from app.clock import Clock
 from app.db import SessionFactory
 from app.models import ACTIVE_STATUSES, Asset, Job
 from app.providers.base import ProviderRegistry
+
+log = logging.getLogger(__name__)
 
 PRIORITY = {"update": 10, "backfill": 0}
 BACKOFF_SECONDS = (60, 300, 900, 3600)
@@ -61,8 +64,15 @@ async def enqueue(sf: SessionFactory, registry: ProviderRegistry, clock: Clock, 
 
 async def enqueue_all(sf: SessionFactory, registry: ProviderRegistry, clock: Clock, kind: str = "update") -> list[Job]:
     async with sf() as s:
-        asset_ids = (await s.scalars(select(Asset.id).where(Asset.enabled).order_by(Asset.id))).all()
-    return [await enqueue(sf, registry, clock, asset_id, kind) for asset_id in asset_ids]
+        assets = (await s.execute(select(Asset.id, Asset.provider).where(Asset.enabled).order_by(Asset.id))).all()
+    created = []
+    for asset_id, provider in assets:
+        if registry.find(provider) is None:
+            # One stale asset must not abort the scheduled update for everyone else.
+            log.warning("skipping asset %d: unknown provider %r", asset_id, provider)
+            continue
+        created.append(await enqueue(sf, registry, clock, asset_id, kind))
+    return created
 
 
 async def claim_next(sf: SessionFactory, clock: Clock) -> int | None:
@@ -182,3 +192,18 @@ async def list_recent(sf: SessionFactory, limit: int = 200) -> list[tuple[Job, A
             select(Job, Asset).join(Asset, Asset.id == Job.asset_id).order_by(Job.id.desc()).limit(limit)
         )
         return [(job, asset) for job, asset in result]
+
+
+async def prune(sf: SessionFactory, clock: Clock, keep_days: int = 30) -> int:
+    """Delete finished jobs older than `keep_days`, always keeping each asset's latest job. Returns the count."""
+    cutoff = clock.now() - timedelta(days=keep_days)
+    latest = select(func.max(Job.id)).group_by(Job.asset_id)
+    async with sf.begin() as s:
+        result = await s.execute(
+            delete(Job).where(
+                Job.status.in_(("done", "failed", "cancelled")),
+                Job.finished_at < cutoff,
+                Job.id.not_in(latest),
+            )
+        )
+    return result.rowcount

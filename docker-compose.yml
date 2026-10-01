@@ -1,6 +1,6 @@
 services:
   db:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.30.2-pg16
     environment:
       POSTGRES_USER: ohlcv
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ohlcv}
@@ -26,8 +26,6 @@ services:
       ALPACA_KEY_ID: ${ALPACA_KEY_ID:-}
       ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
       ALPACA_TRADING_URL: ${ALPACA_TRADING_URL:-https://paper-api.alpaca.markets}
-      OANDA_API_TOKEN: ${OANDA_API_TOKEN:-}
-      OANDA_ENVIRONMENT: ${OANDA_ENVIRONMENT:-}
       TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
     ports:
       - "${APP_PORT:-8000}:8000"

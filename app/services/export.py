@@ -58,7 +58,7 @@ def _filters(asset_id: int, start: datetime | None, end: datetime | None) -> lis
     return conditions
 
 
-def _valid():
+def valid_candle():
     """The single validity rule, shared by export_range and stream_csv."""
     cols = (CandleRow.open, CandleRow.high, CandleRow.low, CandleRow.close, CandleRow.volume)
     finite = [and_(c != NAN, c != INF, c != NINF) for c in cols]
@@ -74,7 +74,7 @@ async def export_range(sf: SessionFactory, asset_id: int, start: datetime | None
     async with sf() as s:
         first, last = (
             await s.execute(
-                select(func.min(CandleRow.ts), func.max(CandleRow.ts)).where(*_filters(asset_id, start, end), _valid())
+                select(func.min(CandleRow.ts), func.max(CandleRow.ts)).where(*_filters(asset_id, start, end), valid_candle())
             )
         ).one()
     return ExportRange(first, last) if first is not None else None
@@ -85,7 +85,7 @@ async def stream_csv(sf: SessionFactory, asset_id: int, start: datetime | None, 
     buffer: list[str] = []
     stmt = (
         select(CandleRow.ts, CandleRow.open, CandleRow.close, CandleRow.high, CandleRow.low, CandleRow.volume)
-        .where(*_filters(asset_id, start, end), _valid())
+        .where(*_filters(asset_id, start, end), valid_candle())
         .order_by(CandleRow.ts)
         .execution_options(yield_per=FLUSH_ROWS)
     )
@@ -100,7 +100,7 @@ async def stream_csv(sf: SessionFactory, asset_id: int, start: datetime | None, 
         yield "".join(buffer)
     async with sf() as s:
         skipped = (
-            await s.execute(select(func.count()).select_from(CandleRow).where(*_filters(asset_id, start, end), not_(_valid())))
+            await s.execute(select(func.count()).select_from(CandleRow).where(*_filters(asset_id, start, end), not_(valid_candle())))
         ).scalar_one()
     if skipped:
         log.warning("export of asset %s: skipped %d invalid candles", asset_id, skipped)

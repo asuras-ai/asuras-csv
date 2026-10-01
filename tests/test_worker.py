@@ -181,3 +181,28 @@ async def test_stop_is_bounded_when_a_claim_hangs(sf, monkeypatch):
     t0 = time.monotonic()
     await asyncio.wait_for(worker.stop(), 5)
     assert time.monotonic() - t0 < 1
+
+
+async def test_on_progress_called_after_finish_and_fail(sf, clock):
+    calls = []
+    registry = ProviderRegistry([FakeProvider(clock)])
+    asset = await make_asset(sf)
+    await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    await run_one(Worker(sf, registry, clock, on_progress=lambda: calls.append("done")), sf, clock)
+    assert calls == ["done"]
+
+    bad = ProviderRegistry([FakeProvider(clock, fail_after=0, error=PermanentError("Fake: bad"))])
+    other = await make_asset(sf, provider_symbol="B")
+    await jobs.enqueue(sf, bad, clock, other.id, "backfill")
+    await run_one(Worker(sf, bad, clock, on_progress=lambda: calls.append("failed")), sf, clock)
+    assert calls == ["done", "failed"]
+
+
+async def test_on_progress_not_called_when_a_backfill_slice_yields(sf, clock):
+    calls = []
+    registry = ProviderRegistry([FakeProvider(clock, seconds_per_chunk=25)])
+    asset = await make_asset(sf)
+    await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    job = await run_one(Worker(sf, registry, clock, slice_seconds=60, on_progress=lambda: calls.append(1)), sf, clock)
+    assert job.status == "queued"
+    assert calls == []

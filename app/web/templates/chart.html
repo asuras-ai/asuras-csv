@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ asset.jesse_symbol }} chart{% endblock %}
+{% block content %}
+<h2>{{ asset.jesse_symbol }} <span class="muted">{{ asset.provider_symbol }} · UTC</span></h2>
+<div class="toolbar" id="ranges" role="group">
+  {% for r in ranges %}<button type="button" data-range="{{ r }}" class="{{ '' if r == default_range else 'secondary outline' }}">{{ r }}</button>{% endfor %}
+  <span id="status" class="muted"></span>
+</div>
+<div id="chart" style="width:100%;height:480px"></div>
+<p><a href="/">Back to assets</a></p>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function () {
+  var url = "/assets/{{ asset.id }}/candles.json";
+  var el = document.getElementById("chart"), status = document.getElementById("status");
+  if (!window.LightweightCharts) {
+    status.textContent = "Chart library failed to load";
+    return;
+  }
+  var dark = window.matchMedia("(prefers-color-scheme: dark)");
+  function theme() {
+    var d = dark.matches;
+    return {
+      layout: { background: { type: "solid", color: d ? "#13171f" : "#ffffff" }, textColor: d ? "#c2c7d0" : "#373c44" },
+      grid: { vertLines: { color: d ? "#222833" : "#eceff3" }, horzLines: { color: d ? "#222833" : "#eceff3" } }
+    };
+  }
+  var chart = LightweightCharts.createChart(el, Object.assign({
+    width: el.clientWidth, height: 480, timeScale: { timeVisible: true, secondsVisible: false }
+  }, theme()));
+  var candles = chart.addCandlestickSeries();
+  var volume = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
+  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+  dark.addEventListener("change", function () { chart.applyOptions(theme()); });
+  function fit() { chart.applyOptions({ width: el.clientWidth }); }
+  if (window.ResizeObserver) { new ResizeObserver(fit).observe(el); } else { window.addEventListener("resize", fit); }
+
+  var token = 0;
+  function load(range) {
+    var mine = ++token;
+    status.textContent = "Loading…";
+    fetch(url + "?range=" + encodeURIComponent(range))
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (data) {
+        if (mine !== token) return;
+        candles.setData(data.candles);
+        volume.setData(data.candles.map(function (c) {
+          return { time: c.time, value: c.volume, color: c.close >= c.open ? "#26a69a80" : "#ef535080" };
+        }));
+        chart.timeScale().fitContent();
+        status.textContent = data.candles.length ? data.candles.length + " bars of " + data.interval : "No candles stored yet.";
+      })
+      .catch(function (e) { if (mine === token) status.textContent = "Failed to load: " + e.message; });
+  }
+  document.getElementById("ranges").addEventListener("click", function (ev) {
+    var b = ev.target.closest("button[data-range]");
+    if (!b) return;
+    document.querySelectorAll("#ranges button").forEach(function (x) { x.classList.add("secondary", "outline"); });
+    b.classList.remove("secondary", "outline");
+    load(b.dataset.range);
+  });
+  load("{{ default_range }}");
+})();
+</script>
+{% endblock %}

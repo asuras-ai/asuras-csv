@@ -4,19 +4,35 @@
 <div class="toolbar">
   <a href="/assets/new" role="button">Add asset</a>
   <form method="post" action="/assets/update-all"><button class="secondary">Update all</button></form>
+  {# Checkboxes live in the polled rows but attach to this form via form="zip-form"; hx-preserve keeps them checked across polls. #}
+  <form id="zip-form" method="get" action="/export.zip" class="toolbar">
+    <label>From <input type="date" name="start"></label>
+    <label>To <input type="date" name="end"></label>
+    <button class="secondary outline">Export selected (ZIP)</button>
+    <span id="zip-msg" class="error" role="alert"></span>
+  </form>
 </div>
+<script>
+document.getElementById("zip-form").addEventListener("submit", function (ev) {
+  var msg = document.getElementById("zip-msg");
+  if (document.querySelectorAll('input[name="ids"]:checked').length === 0) {
+    ev.preventDefault();
+    msg.textContent = "Select at least one asset.";
+  } else {
+    msg.textContent = "";
+  }
+});
+</script>
 <div class="overflow-auto">
 <table class="striped">
   <thead>
     <tr>
-      <th>Jesse symbol</th><th>Provider</th><th>Class</th><th>First candle</th><th>Last candle</th>
+      <th></th><th>Jesse symbol</th><th>Provider</th><th>Class</th><th>First candle</th><th>Last candle</th>
       <th>Candles</th><th>Fetched until</th><th>Status</th><th>Actions</th>
     </tr>
   </thead>
-  <tbody hx-get="/assets/rows" hx-trigger="every 2s" hx-swap="innerHTML">
-    {% include "_asset_rows.html" %}
-  </tbody>
+  {% include "_asset_tbody.html" %}
 </table>
 </div>
-<p class="muted">Times are UTC. Candle counts refresh every couple of minutes.</p>
+<p class="muted">Times are UTC. The table refreshes every 2 s while a job is active, otherwise every 30 s.</p>
 {% endblock %}

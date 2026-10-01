@@ -76,3 +76,26 @@ async def test_shutdown_safe_before_start(sf, clock):
     scheduler = UpdateScheduler(sf, ProviderRegistry([FakeProvider(clock)]), clock)
     # shutdown() without start() should not raise
     scheduler.shutdown()
+
+
+async def test_prune_job_is_registered_regardless_of_update_schedule(sf, clock):
+    scheduler = UpdateScheduler(sf, ProviderRegistry([FakeProvider(clock)]), clock)
+    scheduler.start()
+    try:
+        for enabled in (False, True, False):
+            scheduler.apply(settings(enabled))
+            job = scheduler._scheduler.get_job("prune-jobs")
+            assert job is not None
+            assert job.coalesce and job.misfire_grace_time == 3600
+            assert (job.next_run_time.hour, job.next_run_time.minute) == (3, 30)
+    finally:
+        scheduler.shutdown()
+
+
+async def test_prune_job_is_registered_by_start_even_without_apply(sf, clock):
+    scheduler = UpdateScheduler(sf, ProviderRegistry([FakeProvider(clock)]), clock)
+    scheduler.start()
+    try:
+        assert scheduler._scheduler.get_job("prune-jobs") is not None
+    finally:
+        scheduler.shutdown()

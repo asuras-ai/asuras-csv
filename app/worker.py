@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 
 from app.clock import Clock
 from app.db import SessionFactory
@@ -26,6 +27,7 @@ class Worker:
         *,
         poll_interval: float = 1.0,
         slice_seconds: float = SLICE_SECONDS,
+        on_progress: Callable[[], None] | None = None,
     ):
         self._sf = sf
         self._registry = registry
@@ -33,6 +35,7 @@ class Worker:
         self._target = concurrency
         self._poll_interval = poll_interval
         self._slice_seconds = slice_seconds
+        self._on_progress = on_progress
         self._slots: dict[int, asyncio.Task] = {}
         self._running = False
         self._claiming: set[int] = set()
@@ -103,6 +106,13 @@ class Worker:
                 await self._clock.sleep(delay)
                 delay = min(delay * 2, 60.0)
 
+    def _notify(self) -> None:
+        if self._on_progress is not None:
+            try:
+                self._on_progress()
+            except Exception:
+                log.exception("on_progress callback failed")
+
     async def run_job(self, job_id: int) -> None:
         began = self._clock.monotonic()
 
@@ -116,6 +126,7 @@ class Worker:
         except PermanentError as exc:
             log.warning("job %d failed: %s", job_id, exc)
             await self._settle(jobs.fail, self._sf, self._clock, job_id, str(exc), elapsed())
+            self._notify()
         except TransientError as exc:
             log.warning("job %d paused: %s", job_id, exc)
             await self._settle(jobs.pause, self._sf, self._clock, job_id, str(exc), elapsed())
@@ -125,5 +136,7 @@ class Worker:
         else:
             if outcome is SliceOutcome.DONE:
                 await self._settle(jobs.finish, self._sf, self._clock, job_id, elapsed())
+                self._notify()
             elif outcome is SliceOutcome.YIELDED:
+                # No notify: stats only change visibly when a job ends, and a slice yield would trigger a full scan.
                 await self._settle(jobs.requeue, self._sf, self._clock, job_id, elapsed())

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from app.clock import Clock
 from app.config import EnvConfig
 from app.db import SessionFactory, make_engine, make_session_factory
-from app.providers import alpaca, binance, dukascopy, oanda, twelvedata
+from app.providers import alpaca, binance, twelvedata
 from app.providers.base import ProviderRegistry
 from app.providers.http import ProviderClient
 from app.scheduler import UpdateScheduler
@@ -32,8 +32,6 @@ def build_registry(http: httpx.AsyncClient, clock: Clock, settings: SettingsServ
             alpaca.AlpacaProvider(
                 ProviderClient(alpaca.POLICY, http, clock), settings.alpaca_credentials, env.alpaca_trading_url
             ),
-            dukascopy.DukascopyProvider(ProviderClient(dukascopy.POLICY, http, clock)),
-            oanda.OandaProvider(ProviderClient(oanda.POLICY, http, clock), settings.oanda_credentials),
             twelvedata.TwelveDataProvider(
                 ProviderClient(twelvedata.POLICY, http, clock),
                 settings.twelvedata_credentials,
@@ -74,7 +72,9 @@ def create_app(
                 if recovered:
                     log.info("re-queued %d interrupted jobs", recovered)
                 current = await settings.load()
-                services.worker = Worker(sf, registry, clock, current.worker_concurrency)
+                services.worker = Worker(
+                    sf, registry, clock, current.worker_concurrency, on_progress=lambda: services.stats.refresh_soon(sf)
+                )
                 services.worker.start()
                 services.scheduler = UpdateScheduler(sf, registry, clock)
                 services.scheduler.apply(current)

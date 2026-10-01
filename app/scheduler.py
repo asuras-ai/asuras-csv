@@ -15,6 +15,7 @@ from app.services.settings import AppSettings
 
 log = logging.getLogger(__name__)
 JOB_ID = "update-all"
+PRUNE_JOB_ID = "prune-jobs"
 
 
 class UpdateScheduler:
@@ -25,6 +26,15 @@ class UpdateScheduler:
         self._scheduler = AsyncIOScheduler(timezone=UTC)
 
     def start(self) -> None:
+        self._scheduler.add_job(
+            self.prune,
+            CronTrigger(hour=3, minute=30, timezone=UTC),
+            id=PRUNE_JOB_ID,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
         self._scheduler.start()
 
     def shutdown(self) -> None:
@@ -50,6 +60,11 @@ class UpdateScheduler:
                 coalesce=True,
                 misfire_grace_time=3600,
             )
+
+    async def prune(self) -> int:
+        deleted = await jobs.prune(self._sf, self._clock)
+        log.info("pruned %d old finished jobs", deleted)
+        return deleted
 
     async def run_now(self) -> int:
         created = await jobs.enqueue_all(self._sf, self._registry, self._clock)

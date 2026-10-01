@@ -1,15 +1,17 @@
 """HTML routes (Jinja2 + HTMX)."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
 from app.domain import ProviderError
 from app.models import ACTIVE_STATUSES, Asset, Job
@@ -17,8 +19,11 @@ from app.services import assets as asset_service
 from app.services import jobs
 from app.services.assets import EMPTY_STATS, AssetStats
 from app.services.export import day_bounds, export_filename, export_range, stream_csv
+from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
+from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import JobProgress, estimate_text, format_duration, job_progress
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["dt"] = lambda value: value.strftime("%Y-%m-%d %H:%M") if value else "—"
@@ -27,6 +32,11 @@ templates.env.filters["duration"] = format_duration
 
 def services(request: Request):
     return request.app.state.services
+
+
+def message_page(message: str, status_code: int) -> HTMLResponse:
+    html = f'<p class="error">{escape(message)}</p><p><a href="/">Back to assets</a></p>'
+    return HTMLResponse(html, status_code=status_code)
 
 
 def redirect(url: str) -> RedirectResponse:
@@ -60,14 +70,20 @@ async def _asset_rows(svc) -> list[AssetRow]:
     return rows
 
 
+async def _rows_context(svc) -> dict:
+    rows = await _asset_rows(svc)
+    active = any(row.job is not None and row.job.status in ACTIVE_STATUSES for row in rows)
+    return {"rows": rows, "active": active}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def assets_page(request: Request):
-    return templates.TemplateResponse(request, "assets.html", {"rows": await _asset_rows(services(request))})
+    return templates.TemplateResponse(request, "assets.html", await _rows_context(services(request)))
 
 
 @router.get("/assets/rows", response_class=HTMLResponse)
 async def asset_rows(request: Request):
-    return templates.TemplateResponse(request, "_asset_rows.html", {"rows": await _asset_rows(services(request))})
+    return templates.TemplateResponse(request, "_asset_tbody.html", await _rows_context(services(request)))
 
 
 def _new_page(request: Request, error: str | None = None, status_code: int = 200):
@@ -163,7 +179,10 @@ async def create(
 @router.post("/assets/update-all")
 async def update_all(request: Request):
     svc = services(request)
-    await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
+    try:
+        await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
+    except ProviderError:
+        log.warning("update-all failed", exc_info=True)
     return redirect("/")
 
 
@@ -172,7 +191,10 @@ async def update_one(request: Request, asset_id: int):
     svc = services(request)
     if await asset_service.get_asset(svc.sf, asset_id) is None:
         raise HTTPException(404, "Asset not found")
-    await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
+    try:
+        await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
+    except ProviderError as exc:
+        return message_page(f"Cannot update this asset: {exc}", 400)
     return redirect("/")
 
 
@@ -255,6 +277,40 @@ async def export_csv(request: Request, asset_id: int, start: str | None = None, 
     )
 
 
+@router.get("/assets/{asset_id}/chart", response_class=HTMLResponse)
+async def chart_page(request: Request, asset_id: int):
+    asset = await _asset_or_404(services(request), asset_id)
+    context = {"asset": asset, "ranges": list(RANGES), "default_range": DEFAULT_RANGE}
+    return templates.TemplateResponse(request, "chart.html", context)
+
+
+@router.get("/assets/{asset_id}/candles.json")
+async def candles_json(request: Request, asset_id: int, range: Annotated[str, Query(pattern="^(1D|1W|1M|6M|1Y|All)$")] = DEFAULT_RANGE):
+    svc = services(request)
+    await _asset_or_404(svc, asset_id)
+    bucket, candles = await candles_for_chart(svc.sf, asset_id, range)
+    return {"interval": interval_label(bucket), "candles": candles}
+
+
+@router.get("/export.zip")
+async def export_zip(request: Request, ids: Annotated[list[int] | None, Query()] = None, start: str | None = None, end: str | None = None):
+    svc = services(request)
+    if not ids:
+        return message_page("Select at least one asset.", 400)
+    start_dt, end_dt = day_bounds(_parse_day(start), _parse_day(end))
+    assets = [await _asset_or_404(svc, asset_id) for asset_id in dict.fromkeys(ids)]
+    tmp = await build_zip(svc.sf, assets, start_dt, end_dt)
+    if tmp is None:
+        return message_page("No candles in this range for the selected assets.", 404)
+    filename = f"ohlcv-export-{datetime.now(UTC):%Y%m%d-%H%M%S}.zip"
+    return StreamingResponse(
+        iter_and_close(tmp),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(tmp.close),
+    )
+
+
 @dataclass(frozen=True)
 class JobRow:
     job: Job
@@ -302,7 +358,6 @@ async def _settings_page(request: Request, error: str | None = None, status_code
         "presets": CRON_PRESETS,
         "next_run": svc.scheduler.next_run() if svc.scheduler else None,
         "key_hint": _key_hint(current.alpaca_key_id),
-        "oanda_hint": _key_hint(current.oanda_api_token),
         "twelvedata_hint": _key_hint(current.twelvedata_api_key),
     }
     return templates.TemplateResponse(request, "settings.html", context, status_code=status_code)
@@ -321,8 +376,6 @@ async def save_settings(
     schedule_enabled: Annotated[str | None, Form()] = None,
     alpaca_key_id: Annotated[str, Form()] = "",
     alpaca_secret_key: Annotated[str, Form()] = "",
-    oanda_api_token: Annotated[str, Form()] = "",
-    oanda_environment: Annotated[str, Form()] = "",
     twelvedata_api_key: Annotated[str, Form()] = "",
 ):
     svc = services(request)
@@ -337,11 +390,6 @@ async def save_settings(
             values["alpaca_key_id"] = alpaca_key_id.strip()
         if alpaca_secret_key.strip():
             values["alpaca_secret_key"] = alpaca_secret_key.strip()
-    if not current.oanda_from_env and oanda_api_token.strip():
-        values["oanda_api_token"] = oanda_api_token.strip()
-    if not current.oanda_environment_from_env:
-        if oanda_environment.strip():
-            values["oanda_environment"] = oanda_environment.strip()
     if not current.twelvedata_from_env and twelvedata_api_key.strip():
         values["twelvedata_api_key"] = twelvedata_api_key.strip()
     try:
