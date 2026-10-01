@@ -248,3 +248,62 @@ async def test_a_long_queued_job_is_paused_not_failed_on_its_first_transient_err
     assert await jobs.claim_next(sf, clock) == job.id
     await jobs.pause(sf, clock, job.id, "Fake: boom", 0.0)
     assert (await jobs.get_job(sf, job.id)).status == "paused"
+
+
+async def _insert_finished(sf, asset_id, status, finished_at):
+    from app.models import Job
+
+    async with sf.begin() as s:
+        job = Job(
+            asset_id=asset_id, kind="update", priority=10, status=status, range_start=finished_at,
+            range_end=finished_at, queued_at=finished_at, finished_at=finished_at,
+        )
+        s.add(job)
+    return job.id
+
+
+async def test_prune_deletes_old_finished_jobs_but_keeps_recent_ones(sf, clock):
+    from datetime import timedelta
+
+    asset = await make_asset(sf)
+    old = clock.now() - timedelta(days=40)
+    recent = clock.now() - timedelta(days=5)
+    old_ids = [await _insert_finished(sf, asset.id, st, old) for st in ("done", "failed", "cancelled")]
+    recent_id = await _insert_finished(sf, asset.id, "done", recent)
+    latest_id = await _insert_finished(sf, asset.id, "done", recent)
+    assert await jobs.prune(sf, clock) == 3
+    assert [await jobs.get_job(sf, i) for i in old_ids] == [None] * 3
+    assert await jobs.get_job(sf, recent_id) is not None
+    assert await jobs.get_job(sf, latest_id) is not None
+
+
+async def test_prune_keeps_the_latest_job_per_asset_even_when_old(sf, clock):
+    from datetime import timedelta
+
+    a = await make_asset(sf, provider_symbol="A")
+    b = await make_asset(sf, provider_symbol="B")
+    old = clock.now() - timedelta(days=90)
+    a_old = await _insert_finished(sf, a.id, "done", old)
+    a_latest = await _insert_finished(sf, a.id, "failed", old)
+    b_only = await _insert_finished(sf, b.id, "done", old)
+    assert await jobs.prune(sf, clock) == 1
+    assert await jobs.get_job(sf, a_old) is None
+    assert await jobs.get_job(sf, a_latest) is not None
+    assert await jobs.get_job(sf, b_only) is not None
+
+
+async def test_prune_never_touches_active_jobs(sf, clock):
+    from datetime import timedelta
+
+    old = clock.now() - timedelta(days=90)
+    ids = []
+    for status in ("queued", "running", "waiting", "paused"):
+        asset = await make_asset(sf, provider_symbol=status)
+        async with sf.begin() as s:
+            job = Job(asset_id=asset.id, kind="update", priority=10, status=status, range_start=old,
+                      range_end=old, queued_at=old)
+            s.add(job)
+        ids.append(job.id)
+        await _insert_finished(sf, asset.id, "done", old)  # newer id, so the active job is not the asset's latest
+    await jobs.prune(sf, clock)
+    assert [await jobs.get_job(sf, i) is not None for i in ids] == [True] * 4

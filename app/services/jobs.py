@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import IntegrityError
 
@@ -182,3 +182,18 @@ async def list_recent(sf: SessionFactory, limit: int = 200) -> list[tuple[Job, A
             select(Job, Asset).join(Asset, Asset.id == Job.asset_id).order_by(Job.id.desc()).limit(limit)
         )
         return [(job, asset) for job, asset in result]
+
+
+async def prune(sf: SessionFactory, clock: Clock, keep_days: int = 30) -> int:
+    """Delete finished jobs older than `keep_days`, always keeping each asset's latest job. Returns the count."""
+    cutoff = clock.now() - timedelta(days=keep_days)
+    latest = select(func.max(Job.id)).group_by(Job.asset_id)
+    async with sf.begin() as s:
+        result = await s.execute(
+            delete(Job).where(
+                Job.status.in_(("done", "failed", "cancelled")),
+                Job.finished_at < cutoff,
+                Job.id.not_in(latest),
+            )
+        )
+    return result.rowcount
