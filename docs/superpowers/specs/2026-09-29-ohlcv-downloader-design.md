@@ -27,7 +27,7 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 - `db`: `timescale/timescaledb:latest-pg16`, named volume for data, `restart: unless-stopped`.
 - `app`: built from repo `Dockerfile`, exposes port 8000, depends on `db`, `restart: unless-stopped`. Runs Alembic migrations on startup, then serves uvicorn.
 
-`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `OANDA_API_TOKEN`, `OANDA_ENVIRONMENT`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
+`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `OANDA_API_TOKEN`, `OANDA_ENVIRONMENT`, `TWELVEDATA_API_KEY`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
 
 ## Data Model
 
@@ -35,9 +35,9 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 | column | type | notes |
 |---|---|---|
 | id | serial PK | |
-| provider | text | `binance` \| `alpaca` \| `dukascopy` \| `oanda` |
+| provider | text | `binance` \| `alpaca` \| `dukascopy` \| `oanda` \| `twelvedata` |
 | provider_symbol | text | e.g. `BTCUSDT`, `AAPL`, `EURUSD` |
-| asset_class | text | `crypto` \| `stock` \| `etf` \| `forex` \| `metal` \| `cfd` |
+| asset_class | text | `crypto` \| `stock` \| `etf` \| `forex` \| `metal` \| `cfd` \| `commodity` |
 | jesse_symbol | text | `BASE-QUOTE`, e.g. `BTC-USDT`, `AAPL-USD`, `EUR-USD`; auto-suggested, user-editable |
 | start_date | timestamptz | first candle to backfill from |
 | fetched_until | timestamptz null | exclusive end of the range already fetched from the provider (NULL = nothing fetched yet). Advances even when a window has no candles (weekends, holidays, pre-listing), so empty ranges are never requested twice |
@@ -77,7 +77,7 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 Progress is `(assets.fetched_until − range_start) / (range_end − range_start)`.
 
 ### `settings`
-Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`. Environment variables override DB values for the Alpaca keys and the OANDA token; `OANDA_ENVIRONMENT`, when non-empty, overrides `oanda_environment` independently of the token.
+Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`, `twelvedata_api_key`. Environment variables override DB values for the Alpaca keys, the OANDA token and the Twelve Data key; `OANDA_ENVIRONMENT`, when non-empty, overrides `oanda_environment` independently of the token.
 
 ## Providers
 
@@ -134,6 +134,15 @@ class Provider(Protocol):
 - `earliest_available`: one request from 2000-01-01 with `count=1`; the first candle's time.
 - `available_until` = current minute minus a 2-minute lag (`PUBLISH_LAG`). `estimate_requests` = ceil(minutes / 4999).
 - Budget: OANDA allows 120 requests/s per IP and answers 429 beyond it. The app uses 20 req/s with 2 in flight. There are no quota headers. A malformed candles response is a transient error (the job retries and the cursor does not move). Errors 400/401/403/404 are permanent; 429 is throttling.
+
+### Twelve Data (US stocks, ETFs, forex, metals)
+- REST API `https://api.twelvedata.com`; auth is the query parameter `apikey` (a free Basic key via email signup, from `TWELVEDATA_API_KEY` or the Settings page; the env var wins). A missing key is a permanent error before any request ("API key missing"); symbol search still works without one.
+- Candles: `GET /time_series?symbol=..&interval=1min&start_date=..&end_date=..&timezone=UTC&order=asc&outputsize=5000`. `fetch` walks windows `[cursor, min(cursor + 4999 min, end))` (`PAGE = 4999`), sending `start_date = cursor` and `end_date = window_end - 1 minute` (naive ISO `YYYY-MM-DDTHH:MM:SS`; `timezone=UTC` is always sent, so the naive `datetime` values are attached as UTC). `prepost` is not sent, so US stocks return the regular session only. Prices are strings; forex and metals have no `volume` key (volume = 0). Verified live on 2026-09-30: `end_date` is inclusive (a 14:00 to 14:05 request returns 14:00..14:05, 6 rows), and `timezone=UTC` applies to `start_date`/`end_date` (a 13:25 to 13:32 UTC request for AAPL starts at 13:30, the market open). Rows are sorted and deduped client-side (the API default order is descending); any row outside `[cursor, window_end)` raises a transient error ("returned candles outside the requested window") instead of being clipped, so the cursor never moves past a range misunderstanding. `covered_until` = window end, so empty windows (weekends, closed markets) advance the cursor.
+- Errors arrive as JSON `{"code", "message", "status": "error"}` with a matching HTTP status, and are also honoured inside an HTTP 200. 401/403 (key rejected), 404 (unknown symbol) and other 400 are permanent. A 400 saying "No data is available" (case-insensitive) is an empty window. 429 is throttling, whether it arrives as HTTP 429 or as `code: 429` in a 200/400 body (`RateLimitPolicy.is_throttled`, checked by the client before success bookkeeping). A message containing "for the day" pauses until the next UTC midnight + 60 s, capped at 1 hour because the reset time is unverified, and the job shows "Twelve Data daily credit limit reached, retrying at HH:MM:SS UTC" (never the "unavailable" wording); one containing "minute" pauses until the next UTC minute + 5 s; otherwise the default backoff. This uses the generic `RateLimitPolicy.throttle_delay` hook, which may return a `Throttle(delay, reason)`. Keys are scrubbed from error messages. A success body without a `values` list is transient.
+- Budget: free Basic plan is 8 credits/min and 800/day, 1 credit per `/time_series` request. The app sends 7 per minute with 1 in flight. About 105 requests cover a year of 1-minute data (about 15 minutes at 8/min); the daily cap allows about 7 years per day across all assets.
+- Symbols: `GET /symbol_search?symbol=<query>&outputsize=30`, server-side search, sent without the key. It uses its own `search_client` (1 req/s, burst 3, 2 in flight) so it never competes with downloads, and results are cached per query (trimmed, case-insensitive) for 5 minutes. Kept: `Precious Metal`, `Industrial Metal`, `Energy`, `Agricultural Product` (class `commodity`), `Physical Currency` (`forex`), and `Common Stock` / `ETF` with country United States (`stock` / `etf`); everything else (warrants, foreign listings) is dropped. Deduped by symbol, first wins. Jesse symbol = uppercase with `/` as `-` and other characters removed (`XAU/USD` -> `XAU-USD`, `AAPL` -> `AAPL-USD`, `BRK.B` -> `BRKB-USD`); names are `instrument_name · exchange`. Search ignores `/` and `-` (`xauusd` finds `XAU/USD`).
+- `earliest_available`: `GET /earliest_timestamp?symbol=..&interval=1min&timezone=UTC` (costs a credit), parses `unix_time`; cached per symbol for 1 hour (the details and create steps both call it).
+- `available_until` = current minute minus a 15-minute lag (`PUBLISH_LAG`), because free-plan bars may publish late. `estimate_requests` = ceil(minutes / 4999).
 
 ## Update Logic
 

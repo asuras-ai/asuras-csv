@@ -51,6 +51,15 @@
     </label>
     {% endif %}
   </fieldset>
+  <fieldset>
+    <legend><strong>Twelve Data API key</strong> <span class="muted">(free key at twelvedata.com, email signup)</span></legend>
+    {% if s.twelvedata_from_env %}
+    <p class="muted">Key set through the TWELVEDATA_API_KEY environment variable. Edit your .env file to change it.</p>
+    {% else %}
+    <p class="muted">Current key: {{ twelvedata_hint }}. Leave the key blank to keep it.</p>
+    <label>API key <input type="password" name="twelvedata_api_key" autocomplete="off"></label>
+    {% endif %}
+  </fieldset>
   <button type="submit">Save</button>
 </form>
 {% endblock %}

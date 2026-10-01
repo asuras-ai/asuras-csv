@@ -49,8 +49,10 @@ class PermanentError(ProviderError):
 class RateLimited(ProviderError):
     """The provider throttled us; nothing may be sent to it before resume_at."""
 
-    def __init__(self, provider: str, resume_at: datetime, *, since: datetime | None = None, status: int | None = None):
-        if since is None:
+    def __init__(self, provider: str, resume_at: datetime, *, since: datetime | None = None, status: int | None = None, reason: str | None = None):
+        if reason is not None:
+            message = f"{reason}, retrying at {resume_at:%H:%M:%S} UTC"
+        elif since is None:
             message = f"{provider} rate limit, resuming {resume_at:%H:%M:%S} UTC"
         else:
             message = (

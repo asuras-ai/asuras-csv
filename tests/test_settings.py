@@ -100,3 +100,24 @@ def test_oanda_environment_env_default_is_unset():
 async def test_invalid_oanda_environment_is_rejected(sf, value):
     with pytest.raises(ValueError, match="oanda_environment"):
         await SettingsService(sf, env()).save({"oanda_environment": value})
+
+
+async def test_twelvedata_defaults_and_credentials(sf):
+    svc = SettingsService(sf, env())
+    s = await svc.load()
+    assert (s.twelvedata_api_key, s.twelvedata_from_env) == ("", False)
+    assert await svc.twelvedata_credentials() == ""
+    await svc.save({"twelvedata_api_key": "KEY"})
+    assert await svc.twelvedata_credentials() == "KEY"
+
+
+async def test_twelvedata_environment_variable_overrides_the_saved_key(sf):
+    svc = SettingsService(sf, env(twelvedata_api_key="ENVKEY"))
+    await svc.save({"twelvedata_api_key": "KEY"})
+    s = await svc.load()
+    assert (s.twelvedata_api_key, s.twelvedata_from_env) == ("ENVKEY", True)
+    assert await svc.twelvedata_credentials() == "ENVKEY"
+
+
+def test_twelvedata_env_default_is_unset():
+    assert EnvConfig(_env_file=None, database_url="x").twelvedata_api_key == ""

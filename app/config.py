@@ -12,3 +12,4 @@ class EnvConfig(BaseSettings):
     alpaca_trading_url: str = "https://paper-api.alpaca.markets"
     oanda_api_token: str = ""
     oanda_environment: str = ""  # unset: use the Settings page value (default practice)
+    twelvedata_api_key: str = ""
