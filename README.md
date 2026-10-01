@@ -27,25 +27,52 @@ change the password inside Postgres (`ALTER USER ohlcv PASSWORD '...'`) or recre
 ## Backup & restore
 
 ```bash
-scripts/backup.sh                      # writes backups/ohlcv-YYYYmmdd-HHMMSS.dump, keeps the newest 7
-KEEP=14 scripts/backup.sh              # keep the newest 14 instead
+scripts/backup.sh                      # writes backups/ohlcv-YYYYmmdd-HHMMSS-<pid>.dump (+ .version), keeps the newest 7
+KEEP=14 scripts/backup.sh              # keep the newest 14 instead (KEEP=0 keeps everything)
 PROJECT=myproject scripts/backup.sh    # target a non-default compose project
 ```
 
-The scripts work from any directory and need the `db` container running. Nightly backup at 03:00 via cron:
+Each dump gets a `<dump>.version` sidecar with the TimescaleDB extension version and the PostgreSQL server version.
+The scripts work from any directory and need the `db` container running. Nightly backup at 03:00 via cron (cron has a
+minimal `PATH`, so set it so that `docker` is found, and log the output):
 
 ```
-0 3 * * * /path/to/repo/scripts/backup.sh
+PATH=/usr/local/bin:/usr/bin:/bin
+0 3 * * * /path/to/repo/scripts/backup.sh >> /path/to/repo/backups/backup.log 2>&1
 ```
 
 Restore:
 
 ```bash
-scripts/restore.sh backups/ohlcv-20261001-030000.dump          # asks you to type "restore"
-scripts/restore.sh backups/ohlcv-20261001-030000.dump --yes    # no prompt
+scripts/restore.sh backups/ohlcv-20261001-030000-1234.dump          # asks you to type "restore"
+scripts/restore.sh backups/ohlcv-20261001-030000-1234.dump --yes    # no prompt
+scripts/restore.sh <dump> --force                                    # allow a different TimescaleDB version
 ```
 
-**Warning:** restoring REPLACES all current data in the database with the dump. The script stops the `app` service, runs `timescaledb_pre_restore()`, `pg_restore --clean --if-exists`, then `timescaledb_post_restore()`, and starts the app again. Copy dumps off the machine too; `backups/` lives next to the database.
+**Warning:** restoring REPLACES all current data in the database with the dump. The script follows TimescaleDB's
+documented procedure and fails safe:
+
+1. It validates the dump (`pg_restore -l`) and aborts before changing anything if that fails.
+2. It prints the dump's `.version` and refuses to continue (without `--force`) if its TimescaleDB version differs from the running database.
+3. It takes a safety backup of the current database (`backups/ohlcv-*.dump`, never pruned).
+4. It stops the `app` service (remembering whether it was running), drops and recreates the `ohlcv` database, creates the extension and runs `timescaledb_pre_restore()`.
+5. It runs `pg_restore` (no `--clean`, the database is fresh), then `timescaledb_post_restore()` (always, even on failure).
+6. On success it starts the app again, but only if it was running before. On failure the app stays **stopped** and the script
+   prints the safety dump and the exact command that restores it.
+
+Copy dumps off the machine too; `backups/` lives next to the database.
+
+## TimescaleDB version
+
+The database image is pinned to `timescale/timescaledb:2.30.2-pg16` (TimescaleDB 2.30.2, PostgreSQL 16) in
+`docker-compose.yml` and in the test suite. A dump can only be restored into the same TimescaleDB version, which is why
+`latest` is not used. To upgrade safely:
+
+1. Take a backup (`scripts/backup.sh`) and copy it off the machine.
+2. Change the image tag in `docker-compose.yml` (and `tests/conftest.py`), then `docker compose up -d db`.
+3. Update the extension in the database:
+   `docker compose exec db psql -U ohlcv -d ohlcv -c 'ALTER EXTENSION timescaledb UPDATE;'`
+4. Run `docker compose up -d` and check the app and the tests. Take a new backup, since older dumps need the old version.
 
 ## Security
 
@@ -58,7 +85,7 @@ Click **Export** on an asset, choose a date range and download the CSV. In Jesse
 exchange **Custom Data** and the asset's Jesse symbol (e.g. `BTC-USDT`, `AAPL-USD`, `EUR-USD`).
 
 **Multi-asset ZIP:** tick several assets on the Assets page and click **Export selected (ZIP)**. The ZIP holds one
-Jesse CSV per asset (same files as single exports; assets without data are skipped). The API is
+Jesse CSV per asset (same files as single exports; assets without data are skipped). Optional start/end dates limit the range. The API is
 `GET /export.zip?ids=1&ids=2&start=YYYY-MM-DD&end=YYYY-MM-DD`.
 
 ## Charts

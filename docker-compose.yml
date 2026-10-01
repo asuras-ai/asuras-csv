@@ -1,6 +1,6 @@
 services:
   db:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:2.30.2-pg16
     environment:
       POSTGRES_USER: ohlcv
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ohlcv}

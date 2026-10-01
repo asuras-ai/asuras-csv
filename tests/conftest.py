@@ -24,7 +24,7 @@ def clock() -> FakeClock:
 
 @pytest.fixture(scope="session")
 def database_url():
-    with PostgresContainer("timescale/timescaledb:latest-pg16", driver=None) as pg:
+    with PostgresContainer("timescale/timescaledb:2.30.2-pg16", driver=None) as pg:
         url = pg.get_connection_url().replace("postgresql://", "postgresql+asyncpg://", 1)
         cfg = Config(str(ROOT / "alembic.ini"))
         cfg.set_main_option("script_location", str(ROOT / "migrations"))
