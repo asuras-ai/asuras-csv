@@ -33,25 +33,6 @@
     {% endif %}
   </fieldset>
   <fieldset>
-    <legend><strong>OANDA API token</strong> <span class="muted">(free practice account at oanda.com)</span></legend>
-    {% if s.oanda_from_env %}
-    <p class="muted">Token set through the OANDA_API_TOKEN environment variable. Edit your .env file to change it.</p>
-    {% else %}
-    <p class="muted">Current token: {{ oanda_hint }}. Leave the token blank to keep it.</p>
-    <label>API token <input type="password" name="oanda_api_token" autocomplete="off"></label>
-    {% endif %}
-    {% if s.oanda_environment_from_env %}
-    <p class="muted">Environment: <strong>{{ s.oanda_environment }}</strong> (set via environment, OANDA_ENVIRONMENT).</p>
-    {% else %}
-    <label>Environment
-      <select name="oanda_environment">
-        <option value="practice"{% if s.oanda_environment != "live" %} selected{% endif %}>practice</option>
-        <option value="live"{% if s.oanda_environment == "live" %} selected{% endif %}>live</option>
-      </select>
-    </label>
-    {% endif %}
-  </fieldset>
-  <fieldset>
     <legend><strong>Twelve Data API key</strong> <span class="muted">(free key at twelvedata.com, email signup)</span></legend>
     {% if s.twelvedata_from_env %}
     <p class="muted">Key set through the TWELVEDATA_API_KEY environment variable. Edit your .env file to change it.</p>

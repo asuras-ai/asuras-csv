@@ -1,15 +1,13 @@
 # OHLCV Downloader
 
-Self-hosted tool that downloads 1-minute OHLCV candles into TimescaleDB and exports them as
+Self-hosted tool that downloads 1-minute OHLCV candles from Binance (crypto), Alpaca (US stocks & ETFs) and Twelve Data (US stocks, forex, metals and commodities such as XAU/USD) into TimescaleDB and exports them as
 [Jesse "Custom Data" CSVs](https://docs.jesse.trade/docs/traditional-markets/importing-data#custom-data-csv).
 
 | Asset class | Provider | Key | Notes |
 |---|---|---|---|
 | Crypto | Binance | none | Full history. Binance blocks some regions (HTTP 451), e.g. US servers. |
 | US stocks & ETFs | Alpaca | free | IEX feed from 2016, regular session only (09:30–16:00 ET, early closes respected). IEX volume is lower than consolidated volume. Prices are unadjusted. |
-| Forex | Dukascopy | none | Bid prices; volume = tick count. Slowest source (about 1 hour or more per year per pair, roughly 7,500 files at 2 per second). Dukascopy may refuse requests (HTTP 503) when it decides it has been asked too much; the job then waits and shows "unavailable" until it recovers. Use OANDA if this keeps happening. |
-| Forex, metals & CFDs | OANDA | free practice account | 1m bid candles; volume = tick count. Up to 5000 candles per request, so it is far faster than Dukascopy and the more reliable forex source. Create the token on your OANDA account's "Manage API Access" page, then set `OANDA_API_TOKEN` in `.env` or in Settings. `OANDA_ENVIRONMENT` (`practice` or `live`) is optional: when set it overrides the Settings page, otherwise the Settings value (default `practice`) is used. |
-| Stocks, forex & metals | Twelve Data | free Basic plan (email signup) | 1m candles, regular session only for US stocks. Free limits are 800 requests/day and 8/min; history goes back to about 2020 (the depth varies by symbol, and the asset form shows it via earliest available). Gold is `XAU/USD`. Forex and metals have no volume, so it is 0. Get a key at twelvedata.com, then set `TWELVEDATA_API_KEY` in `.env` (wins over Settings) or in Settings. Speed: about 105 requests per year of 1-minute data, roughly 15 minutes per year at 8/min. The daily cap allows about 7 years of 1-minute history per day in total across all assets, and adding an asset costs about 1 credit (its earliest-date lookup). When the daily cap is hit, the job shows "daily credit limit reached" and retries hourly. The newest 15 minutes are not downloaded yet, because free-plan bars can publish late. |
+| US stocks, forex, metals & commodities | Twelve Data | free Basic plan (email signup) | 1m candles, regular session only for US stocks. Free limits are 800 requests/day and 8/min; history goes back to about 2020 (the depth varies by symbol, and the asset form shows it via earliest available). Gold is `XAU/USD`. Forex and metals have no volume, so it is 0. Get a key at twelvedata.com, then set `TWELVEDATA_API_KEY` in `.env` (wins over Settings) or in Settings. Speed: about 105 requests per year of 1-minute data, roughly 15 minutes per year at 8/min. The daily cap allows about 7 years of 1-minute history per day in total across all assets, and adding an asset costs about 1 credit (its earliest-date lookup). When the daily cap is hit, the job shows "daily credit limit reached" and retries hourly. The newest 15 minutes are not downloaded yet, because free-plan bars can publish late. |
 
 ## Run
 

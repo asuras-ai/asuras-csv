@@ -7,6 +7,8 @@
 
 A self-hosted tool, run with `docker compose`, with a web GUI to download 1-minute OHLCV candles for crypto, stocks, ETFs and forex into a database. Updates download only candles newer than the last stored one. Any asset can be exported as a CSV in the Jesse "Custom Data" format (https://docs.jesse.trade/docs/traditional-markets/importing-data#custom-data-csv).
 
+OANDA and Dukascopy were removed on 2026-10-01 (OANDA needs an account the user can't get; Dukascopy's datafeed returned 503 for all requests).
+
 Single user, runs on a local machine or LAN, no authentication. The app has no login, so a small middleware rejects state-changing requests (POST/PUT/PATCH/DELETE) that a browser marks `Sec-Fetch-Site: cross-site` or whose `Origin` host differs from `Host`; requests with neither header (curl, tests) pass. Keep it off the public internet.
 
 Free APIs have rate limits, and years of 1m history take thousands of requests. The user never has to manage this. They add an asset and walk away. The app splits the download into small requests, paces them to each provider's limits, waits out throttling, resumes after restarts or network outages, and shows progress with an ETA (see **Rate Limits and Long Downloads**).
@@ -27,7 +29,7 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 - `db`: `timescale/timescaledb:latest-pg16`, named volume for data, `restart: unless-stopped`.
 - `app`: built from repo `Dockerfile`, exposes port 8000, depends on `db`, `restart: unless-stopped`. Runs Alembic migrations on startup, then serves uvicorn.
 
-`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `OANDA_API_TOKEN`, `OANDA_ENVIRONMENT`, `TWELVEDATA_API_KEY`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
+`.env.example` provides `POSTGRES_PASSWORD`, `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_TRADING_URL`, `TWELVEDATA_API_KEY`, `APP_PORT`. Compose builds `DATABASE_URL` from `POSTGRES_PASSWORD`.
 
 ## Data Model
 
@@ -35,7 +37,7 @@ Free APIs have rate limits, and years of 1m history take thousands of requests. 
 | column | type | notes |
 |---|---|---|
 | id | serial PK | |
-| provider | text | `binance` \| `alpaca` \| `dukascopy` \| `oanda` \| `twelvedata` |
+| provider | text | `binance` \| `alpaca` \| `twelvedata` |
 | provider_symbol | text | e.g. `BTCUSDT`, `AAPL`, `EURUSD` |
 | asset_class | text | `crypto` \| `stock` \| `etf` \| `forex` \| `metal` \| `cfd` \| `commodity` |
 | jesse_symbol | text | `BASE-QUOTE`, e.g. `BTC-USDT`, `AAPL-USD`, `EUR-USD`; auto-suggested, user-editable |
@@ -77,7 +79,7 @@ Primary key `(asset_id, ts)`. All inserts use `ON CONFLICT DO NOTHING`. Compress
 Progress is `(assets.fetched_until − range_start) / (range_end − range_start)`.
 
 ### `settings`
-Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `oanda_api_token`, `oanda_environment`, `twelvedata_api_key`. Environment variables override DB values for the Alpaca keys, the OANDA token and the Twelve Data key; `OANDA_ENVIRONMENT`, when non-empty, overrides `oanda_environment` independently of the token.
+Key/value rows: `schedule_enabled`, `schedule_cron`, `worker_concurrency`, `alpaca_key_id`, `alpaca_secret_key`, `twelvedata_api_key`. Environment variables override DB values for the Alpaca keys and the Twelve Data key.
 
 ## Providers
 
@@ -117,24 +119,6 @@ class Provider(Protocol):
 - `available_until` = now floored to the minute, minus a 2-minute publish lag (`PUBLISH_LAG`), so the cursor never passes unpublished data.
 - Note: the free IEX feed only covers IEX exchange trades, so volume is lower than consolidated volume and some thinly traded minutes have no bar. The feed is a single constant in the adapter, so it can be switched to `sip` if a paid plan is added later.
 
-### Dukascopy (forex)
-- Free hourly tick files: `https://datafeed.dukascopy.com/datafeed/{PAIR}/{YYYY}/{MM-1:02d}/{DD:02d}/{HH:02d}h_ticks.bi5` (LZMA-compressed; 20-byte big-endian records: ms offset, ask, bid, ask vol, bid vol; prices scaled by point size, 1e5 or 1e3 for JPY pairs).
-- Aggregated into 1m **bid** candles. Volume = tick count in the minute.
-- Missing or empty hour files (weekends, holidays) produce no candles.
-- No published rate limit. The app self-throttles to 2 in-flight downloads and 2 files/s (kept low because Dukascopy blocks fast clients), and treats 429/503 as throttling. One file = one hour, so this is the slowest source (about 1 hour or more per year of history per pair, roughly 7,500 files at 2/s).
-- Each hour file yields one `Chunk` with `covered_until` = end of that hour.
-- `available_until` = start of the current UTC hour minus a 2-hour publish lag (`PUBLISH_LAG`). The current hour's file is not final, and finished hours are often published late. Requesting it too early would return 404 and move the cursor past it, leaving a permanent gap.
-- Symbol list: a built-in list of major and minor pairs, each with its first available date. Jesse symbol = `EUR-USD` etc.
-
-### OANDA (forex, metals, CFDs)
-- OANDA v20 REST API. Hosts: practice `https://api-fxpractice.oanda.com` (free demo account), live `https://api-fxtrade.oanda.com`, chosen by `OANDA_ENVIRONMENT` (non-empty values win over the Settings page, even when the token comes from Settings; the value is trimmed and lower-cased, and anything other than `practice`/`live` makes the provider fail with "OANDA_ENVIRONMENT must be 'practice' or 'live'"; unset means the Settings value, default practice). Auth: `Authorization: Bearer <token>`; the token is created on the account's "Manage API Access" page and is required (missing token = permanent error before any request). Every request sends `Accept-Datetime-Format: UNIX`, so `from`/`to` are UNIX seconds and each candle `time` is a string like `"1476717360.000000000"`.
-- Candles: `GET /v3/instruments/{instrument}/candles?granularity=M1&price=B&from=..&to=..` (bid, consistent with Dukascopy). `count` is never sent together with `from`+`to`; a range may hold at most 5000 candles, so `fetch` walks windows `[cursor, min(cursor + 4999 min, end))` (`PAGE = 4999`, so a window can never exceed 5000 candles even if `to` were inclusive), one request and one `Chunk` each. Prices are strings; volume is tick volume.
-- A candle with `complete: false` is dropped along with everything after it, and `covered_until` is that candle's time. After such a chunk the fetch stops without another request (the next run continues from `covered_until`), so it cannot spin. Otherwise `covered_until` is the window end, so empty windows (weekends) still advance the cursor.
-- Symbols: `GET /v3/accounts`, then `GET /v3/accounts/{id}/instruments` of the first account, cached per (token, environment). An empty or malformed accounts/instruments response is a permanent error ("no accounts found for this token", "no instruments found for this account"). Types CURRENCY, METAL, CFD map to classes forex, metal, cfd. Jesse symbol = name with `_` replaced by `-` (`EUR-USD`, `XAU-USD`, `US30-USD`). Search ignores `_`, `-` and `/`.
-- `earliest_available`: one request from 2000-01-01 with `count=1`; the first candle's time.
-- `available_until` = current minute minus a 2-minute lag (`PUBLISH_LAG`). `estimate_requests` = ceil(minutes / 4999).
-- Budget: OANDA allows 120 requests/s per IP and answers 429 beyond it. The app uses 20 req/s with 2 in flight. There are no quota headers. A malformed candles response is a transient error (the job retries and the cursor does not move). Errors 400/401/403/404 are permanent; 429 is throttling.
-
 ### Twelve Data (US stocks, ETFs, forex, metals)
 - REST API `https://api.twelvedata.com`; auth is the query parameter `apikey` (a free Basic key via email signup, from `TWELVEDATA_API_KEY` or the Settings page; the env var wins). A missing key is a permanent error before any request ("API key missing"); symbol search still works without one.
 - Candles: `GET /time_series?symbol=..&interval=1min&start_date=..&end_date=..&timezone=UTC&order=asc&outputsize=5000`. `fetch` walks windows `[cursor, min(cursor + 4999 min, end))` (`PAGE = 4999`), sending `start_date = cursor` and `end_date = window_end - 1 minute` (naive ISO `YYYY-MM-DDTHH:MM:SS`; `timezone=UTC` is always sent, so the naive `datetime` values are attached as UTC). `prepost` is not sent, so US stocks return the regular session only. Prices are strings; forex and metals have no `volume` key (volume = 0). Verified live on 2026-09-30: `end_date` is inclusive (a 14:00 to 14:05 request returns 14:00..14:05, 6 rows), and `timezone=UTC` applies to `start_date`/`end_date` (a 13:25 to 13:32 UTC request for AAPL starts at 13:30, the market open). Rows are sorted and deduped client-side (the API default order is descending); any row outside `[cursor, window_end)` raises a transient error ("returned candles outside the requested window") instead of being clipped, so the cursor never moves past a range misunderstanding. `covered_until` = window end, so empty windows (weekends, closed markets) advance the cursor.
@@ -164,7 +148,7 @@ Gaps inside the stored range are not filled (out of scope).
 
 Goal: a multi-year backfill runs unattended to completion, with the user only watching the progress bar.
 
-**1. Small requests.** Every fetch is broken into requests the provider can serve: 1000 candles for Binance, one 10,000-bar page for Alpaca, one hour file for Dukascopy, one window of at most 4999 one-minute candles for OANDA. A large download is simply many small requests, each committed on its own.
+**1. Small requests.** Every fetch is broken into requests the provider can serve: 1000 candles for Binance, one 10,000-bar page for Alpaca. A large download is simply many small requests, each committed on its own.
 
 **2. Pacing per provider.** Each provider has a `RateLimitPolicy` that the shared `ProviderClient` enforces for all jobs using that provider:
 
@@ -172,14 +156,12 @@ Goal: a multi-year backfill runs unattended to completion, with the user only wa
 |---|---|---|
 | Binance | 3000 weight/min (50% of the 6000 limit, leaving room for other tools on the same IP) | 2 |
 | Alpaca | 180 req/min (90% of 200) | 1 |
-| Dukascopy | 2 files/s | 2 |
-| OANDA | 20 req/s (of 120) | 2 |
 
 The client uses a token bucket for the budget. It also reads the provider's rate-limit headers after each response: when they report remaining quota near zero, it sleeps until the reported reset time instead of hitting the limit. Budgets are constants in each adapter.
 
-**3. Throttling means waiting, not failing.** On HTTP 429/418 (or 503 from Dukascopy), the client pauses **all** requests to that provider until `Retry-After` (or 60 s if absent, doubling on repeats up to 15 min). Affected jobs show status `waiting` with a message like "Binance rate limit, resuming 14:03:12". This never counts toward the job's error attempts.
+**3. Throttling means waiting, not failing.** On HTTP 429/418 (or a provider-specific status such as 503), the client pauses **all** requests to that provider until `Retry-After` (or 60 s if absent, doubling on repeats up to 15 min). Affected jobs show status `waiting` with a message like "Binance rate limit, resuming 14:03:12". This never counts toward the job's error attempts.
 
-**Honest status.** The client remembers when the current streak of throttling responses began (any non-throttled response ends it, except a stale one that arrives while a pause is still active). If the refusals have lasted 5 minutes or more of elapsed time (measured from the first refusal to now, not from the projected resume time, so one long `Retry-After` alone never counts), the message changes to "Dukascopy unavailable since 14:00 UTC (HTTP 503), retrying at 14:09:30 UTC" so a provider that refuses everything is not presented as merely rate limited. Jobs in `waiting` or `paused` show no ETA, since nothing is being downloaded.
+**Honest status.** The client remembers when the current streak of throttling responses began (any non-throttled response ends it, except a stale one that arrives while a pause is still active). If the refusals have lasted 5 minutes or more of elapsed time (measured from the first refusal to now, not from the projected resume time, so one long `Retry-After` alone never counts), the message changes to "Binance unavailable since 14:00 UTC (HTTP 503), retrying at 14:09:30 UTC" so a provider that refuses everything is not presented as merely rate limited. Jobs in `waiting` or `paused` show no ETA, since nothing is being downloaded.
 
 **4. Transient errors retry automatically.** Network errors, timeouts and 5xx responses are retried 3 times within the request (backoff 2 s, 4 s, 8 s). If a request still fails, the job becomes `paused` and is re-queued with `next_attempt_at` after 1 min, 5 min, 15 min, 1 h, then hourly. After 24 h of consecutive failures without a successful chunk, the job becomes `failed`. Any successful chunk resets the counter. Candles already stored are always kept.
 
@@ -187,7 +169,7 @@ The client uses a token bucket for the budget. It also reads the provider's rate
 
 **6. Restarts resume.** On startup, jobs left `running` or `waiting` return to `queued` and continue from `fetched_until`. `paused` jobs keep their `next_attempt_at`. Stopping the container, rebooting the host or a crash just pauses downloads.
 
-**7. Fair scheduling.** Every job (backfill or update) works in **slices**: after about 60 s of work it commits and returns itself to the queue with a fresh `queued_at`. Workers pick the highest-priority eligible job (`updates` before `backfills`), then the oldest `queued_at`. Short updates never wait behind a multi-hour Dukascopy backfill, and several jobs share the providers in round-robin.
+**7. Fair scheduling.** Every job (backfill or update) works in **slices**: after about 60 s of work it commits and returns itself to the queue with a fresh `queued_at`. Workers pick the highest-priority eligible job (`updates` before `backfills`), then the oldest `queued_at`. Short updates never wait behind a multi-hour backfill, and several jobs share the providers in round-robin.
 
 **8. Visibility.** Progress and ETA come from the cursor. ETA = `estimate_requests(fetched_until, range_end)` divided by the job's measured average rate (`requests_made / run_seconds`) once it has made 20 requests, and by the policy budget before that. The Add Asset form shows an estimate before saving, e.g. "≈ 2,600 requests, about 2 minutes" or "≈ 120,000 files, about 4 hours".
 
@@ -223,7 +205,7 @@ APScheduler runs in the app process. When `schedule_enabled` is set, it runs on 
 - **Export dialog:** start/end date inputs, pre-filled with the stored range, and a Download button.
 - **Delete:** an in-page confirmation, which then deletes the asset and all its candles.
 - **Jobs:** the last 200 jobs with asset, kind, status, progress, requests made, candles added, duration, error, and a Cancel action for active jobs.
-- **Settings:** schedule on/off plus cron preset, worker concurrency, and Alpaca key/secret and OANDA token plus practice/live environment (masked; shows "set via environment" when env vars are present, which makes them read-only in the UI).
+- **Settings:** schedule on/off plus cron preset, worker concurrency,, Alpaca key/secret and Twelve Data key (masked; shows "set via environment" when env vars are present, which makes them read-only in the UI).
 
 Candle count and first/last candle per asset come from one aggregate query per asset list render, cached for a short time if it is slow.
 
@@ -232,8 +214,7 @@ Candle count and first/last candle per asset come from one aggregate query per a
 - **Provider unit tests** with recorded HTTP fixtures (respx):
   - Binance pagination and kline parsing.
   - Alpaca pagination and the regular-session filter, including days on both sides of a DST switch and a half-day.
-  - Dukascopy `.bi5` decoding, point-size scaling (JPY vs non-JPY), 1m aggregation, and empty/missing hour files.
-  - `covered_until` advancing over empty ranges (weekend for Dukascopy, pre-listing range for Alpaca and Binance).
+  - `covered_until` advancing over empty ranges (pre-listing range for Alpaca and Binance).
 - **Rate limiting** (`ProviderClient` with a fake clock and respx):
   - The token bucket keeps the request rate under budget with concurrent callers.
   - Low-quota headers cause a sleep until reset.
