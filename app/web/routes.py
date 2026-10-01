@@ -62,14 +62,20 @@ async def _asset_rows(svc) -> list[AssetRow]:
     return rows
 
 
+async def _rows_context(svc) -> dict:
+    rows = await _asset_rows(svc)
+    active = any(row.job is not None and row.job.status in ACTIVE_STATUSES for row in rows)
+    return {"rows": rows, "active": active}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def assets_page(request: Request):
-    return templates.TemplateResponse(request, "assets.html", {"rows": await _asset_rows(services(request))})
+    return templates.TemplateResponse(request, "assets.html", await _rows_context(services(request)))
 
 
 @router.get("/assets/rows", response_class=HTMLResponse)
 async def asset_rows(request: Request):
-    return templates.TemplateResponse(request, "_asset_rows.html", {"rows": await _asset_rows(services(request))})
+    return templates.TemplateResponse(request, "_asset_tbody.html", await _rows_context(services(request)))
 
 
 def _new_page(request: Request, error: str | None = None, status_code: int = 200):

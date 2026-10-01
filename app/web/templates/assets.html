@@ -15,10 +15,8 @@
       <th>Candles</th><th>Fetched until</th><th>Status</th><th>Actions</th>
     </tr>
   </thead>
-  <tbody hx-get="/assets/rows" hx-trigger="every 2s" hx-swap="innerHTML">
-    {% include "_asset_rows.html" %}
-  </tbody>
+  {% include "_asset_tbody.html" %}
 </table>
 </div>
-<p class="muted">Times are UTC. Candle counts refresh every couple of minutes.</p>
+<p class="muted">Times are UTC. The table refreshes every 2 s while a job is active, otherwise every 30 s.</p>
 {% endblock %}

@@ -1,0 +1,4 @@
+{# Whole tbody: re-rendered by every poll so the server picks the next interval (fast only while a job is active). #}
+<tbody id="asset-rows" hx-get="/assets/rows" hx-trigger="every {{ '2s' if active else '30s' }}" hx-swap="outerHTML">
+{% include "_asset_rows.html" %}
+</tbody>

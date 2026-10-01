@@ -127,3 +127,26 @@ async def test_start_date_bounds_are_enforced(client, clock):
 
 async def test_search_input_blocks_enter_submit(client):
     assert "event.preventDefault()" in (await client.get("/assets/new")).text
+
+
+async def test_rows_poll_every_2s_only_while_a_job_is_active(client, sf, clock):
+    registry = ProviderRegistry([FakeProvider(clock)])
+    asset = await make_asset(sf)
+    idle = await client.get("/assets/rows")
+    assert 'hx-trigger="every 30s"' in idle.text  # no job yet
+    job = await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    busy = await client.get("/assets/rows")
+    assert 'hx-trigger="every 2s"' in busy.text
+    assert busy.text.lstrip().startswith("<tbody") and 'hx-swap="outerHTML"' in busy.text
+    assert 'id="sel-%d"' % asset.id in busy.text and "hx-preserve" in busy.text
+    await jobs.cancel(sf, clock, job.id)
+    assert 'hx-trigger="every 30s"' in (await client.get("/assets/rows")).text
+
+
+async def test_assets_page_tbody_polls_with_the_same_rule(client, sf, clock):
+    registry = ProviderRegistry([FakeProvider(clock)])
+    asset = await make_asset(sf)
+    assert 'hx-trigger="every 30s"' in (await client.get("/")).text
+    await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
+    page = (await client.get("/")).text
+    assert 'hx-trigger="every 2s"' in page and 'hx-get="/assets/rows"' in page
