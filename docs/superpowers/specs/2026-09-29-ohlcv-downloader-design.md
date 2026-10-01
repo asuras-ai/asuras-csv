@@ -203,6 +203,7 @@ APScheduler runs in the app process. When `schedule_enabled` is set, it runs on 
 - **Add asset:** provider select, then symbol search (HTMX type-ahead backed by `search_symbols`), then Jesse symbol (pre-filled, editable) and start date (pre-filled with earliest available). An estimate of requests and download time updates as the start date changes. Saving queues a backfill job.
 - **Edit asset:** jesse_symbol, enabled. Changing `start_date` is not supported, because the stored range only extends forward.
 - **Export dialog:** start/end date inputs, pre-filled with the stored range, and a Download button.
+- **Multi-select ZIP export:** each Assets row has a checkbox (`name="ids"`, attached to a GET form via `form="zip-form"`, with `hx-preserve` and a stable id so selections survive the 2s polling). "Export selected (ZIP)" calls `GET /export.zip?ids=..&start=..&end=..`, returning one Jesse CSV per selected asset that has candles in the range (named like single exports, same bounds rule), `ohlcv-export-YYYYmmdd-HHMMSS.zip`. The ZIP is built incrementally into a spooled temp file (memory bounded) and streamed back. No data at all or an unknown id gives 404.
 - **Delete:** an in-page confirmation, which then deletes the asset and all its candles.
 - **Jobs:** the last 200 jobs with asset, kind, status, progress, requests made, candles added, duration, error, and a Cancel action for active jobs.
 - **Settings:** schedule on/off plus cron preset, worker concurrency,, Alpaca key/secret and Twelve Data key (masked; shows "set via environment" when env vars are present, which makes them read-only in the UI).
@@ -233,4 +234,4 @@ Candle count and first/last candle per asset come from one aggregate query per a
 
 ## Out of Scope (v1)
 
-Authentication, timeframes other than 1m, multi-asset ZIP export, charts, detecting or filling gaps inside the stored range, changing an asset's start date after creation, and paid providers (the provider interface supports adding them later).
+Authentication, timeframes other than 1m, detecting or filling gaps inside the stored range, changing an asset's start date after creation, and paid providers (the provider interface supports adding them later).

@@ -7,7 +7,7 @@ from html import escape
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -17,6 +17,7 @@ from app.services import assets as asset_service
 from app.services import jobs
 from app.services.assets import EMPTY_STATS, AssetStats
 from app.services.export import day_bounds, export_filename, export_range, stream_csv
+from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import JobProgress, estimate_text, format_duration, job_progress
 
 router = APIRouter()
@@ -251,6 +252,24 @@ async def export_csv(request: Request, asset_id: int, start: str | None = None, 
     return StreamingResponse(
         stream_csv(svc.sf, asset_id, rng.first, rng.last + timedelta(minutes=1)),
         media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/export.zip")
+async def export_zip(request: Request, ids: Annotated[list[int] | None, Query()] = None, start: str | None = None, end: str | None = None):
+    svc = services(request)
+    if not ids:
+        raise HTTPException(400, "Select at least one asset")
+    start_dt, end_dt = day_bounds(_parse_day(start), _parse_day(end))
+    assets = [await _asset_or_404(svc, asset_id) for asset_id in dict.fromkeys(ids)]
+    tmp = await build_zip(svc.sf, assets, start_dt, end_dt)
+    if tmp is None:
+        raise HTTPException(404, "No candles in this range for the selected assets")
+    filename = f"ohlcv-export-{datetime.now(UTC):%Y%m%d-%H%M%S}.zip"
+    return StreamingResponse(
+        iter_and_close(tmp),
+        media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

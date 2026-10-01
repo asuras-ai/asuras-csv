@@ -57,6 +57,10 @@ cross-site browser POST/PUT/PATCH/DELETE requests as a guard against forged requ
 Click **Export** on an asset, choose a date range and download the CSV. In Jesse's import form use
 exchange **Custom Data** and the asset's Jesse symbol (e.g. `BTC-USDT`, `AAPL-USD`, `EUR-USD`).
 
+**Multi-asset ZIP:** tick several assets on the Assets page and click **Export selected (ZIP)**. The ZIP holds one
+Jesse CSV per asset (same files as single exports; assets without data are skipped). The API is
+`GET /export.zip?ids=1&ids=2&start=YYYY-MM-DD&end=YYYY-MM-DD`.
+
 ## Development
 
 ```bash

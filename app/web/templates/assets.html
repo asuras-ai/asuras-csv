@@ -4,12 +4,14 @@
 <div class="toolbar">
   <a href="/assets/new" role="button">Add asset</a>
   <form method="post" action="/assets/update-all"><button class="secondary">Update all</button></form>
+  {# Checkboxes live in the polled rows but attach to this form via form="zip-form"; hx-preserve keeps them checked across polls. #}
+  <form id="zip-form" method="get" action="/export.zip"><button class="secondary outline">Export selected (ZIP)</button></form>
 </div>
 <div class="overflow-auto">
 <table class="striped">
   <thead>
     <tr>
-      <th>Jesse symbol</th><th>Provider</th><th>Class</th><th>First candle</th><th>Last candle</th>
+      <th></th><th>Jesse symbol</th><th>Provider</th><th>Class</th><th>First candle</th><th>Last candle</th>
       <th>Candles</th><th>Fetched until</th><th>Status</th><th>Actions</th>
     </tr>
   </thead>
