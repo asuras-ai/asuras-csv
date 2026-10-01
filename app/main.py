@@ -73,7 +73,7 @@ def create_app(
                     log.info("re-queued %d interrupted jobs", recovered)
                 current = await settings.load()
                 services.worker = Worker(
-                    sf, registry, clock, current.worker_concurrency, on_progress=services.stats.invalidate
+                    sf, registry, clock, current.worker_concurrency, on_progress=lambda: services.stats.refresh_soon(sf)
                 )
                 services.worker.start()
                 services.scheduler = UpdateScheduler(sf, registry, clock)

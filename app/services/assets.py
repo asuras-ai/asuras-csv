@@ -122,6 +122,12 @@ class StatsCache:
         if self._task is not None and not self._task.done():
             self._dirty = True
 
+    def refresh_soon(self, sf: SessionFactory) -> None:
+        """Mark stale and start a (single-flight) reload now, so counts are fresh by the next poll."""
+        self.invalidate()
+        if self._clock is not None and self._value is not None:
+            self._refresh(sf)
+
     def clear(self) -> None:
         self.invalidate()
         self._epoch += 1

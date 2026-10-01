@@ -52,7 +52,7 @@ scripts/restore.sh <dump> --force                                    # allow a d
 **Warning:** restoring REPLACES all current data in the database with the dump. The script follows TimescaleDB's
 documented procedure and fails safe:
 
-1. It validates the dump (`pg_restore -l`) and aborts before changing anything if that fails.
+1. It validates the dump (`pg_restore -l`, then a full dry run that reads every byte) and aborts before changing anything if the file is damaged or truncated.
 2. It prints the dump's `.version` and refuses to continue (without `--force`) if its TimescaleDB version differs from the running database.
 3. It takes a safety backup of the current database (`backups/ohlcv-*.dump`, never pruned).
 4. It stops the `app` service (remembering whether it was running), drops and recreates the `ohlcv` database, creates the extension and runs `timescaledb_pre_restore()`.

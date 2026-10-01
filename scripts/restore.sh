@@ -100,12 +100,12 @@ cleanup() {
       echo
       echo "RESTORE FAILED (exit $code). The app is left STOPPED."
       echo "Safety dump of the previous database: $safety"
-      echo "Restore it with:  ${project_prefix}scripts/restore.sh $safety --yes"
+      echo "Restore it with:  ${project_prefix}scripts/restore.sh $(printf %q "$safety") --yes"
       echo "Then start the app: docker compose ${project_flag}start app"
     } >&2
   elif (( app_stopped && was_running )); then
     echo "Starting app..."
-    "${dc[@]}" start app
+    "${dc[@]}" start app || echo "warning: could not start the app; run: docker compose ${project_flag}start app" >&2
   fi
   exit "$code"
 }

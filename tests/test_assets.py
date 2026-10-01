@@ -307,3 +307,15 @@ async def test_failed_refresh_is_logged_and_next_get_retries(sf, clock, caplog):
     await _idle(cache)
     assert counting.opened == 1  # retried
     assert (await cache.get(counting))[asset.id].count == 1
+
+
+async def test_refresh_soon_loads_fresh_counts_without_waiting_for_a_page_view(sf, clock):
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0])
+    cache = StatsCache(clock, ttl_seconds=60)
+    assert (await cache.get(sf))[asset.id].count == 1
+    await seed(sf, asset.id, [1])
+    cache.refresh_soon(sf)  # what the worker calls when a job finishes
+    await _idle(cache)
+    assert cache._value[asset.id].count == 2  # already fresh before the next poll
+    assert (await cache.get(sf))[asset.id].count == 2
