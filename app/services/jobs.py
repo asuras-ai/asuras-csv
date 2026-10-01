@@ -1,6 +1,7 @@
 """Job queue stored in the `jobs` table: creation, claiming and state transitions."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -11,6 +12,8 @@ from app.clock import Clock
 from app.db import SessionFactory
 from app.models import ACTIVE_STATUSES, Asset, Job
 from app.providers.base import ProviderRegistry
+
+log = logging.getLogger(__name__)
 
 PRIORITY = {"update": 10, "backfill": 0}
 BACKOFF_SECONDS = (60, 300, 900, 3600)
@@ -61,8 +64,15 @@ async def enqueue(sf: SessionFactory, registry: ProviderRegistry, clock: Clock, 
 
 async def enqueue_all(sf: SessionFactory, registry: ProviderRegistry, clock: Clock, kind: str = "update") -> list[Job]:
     async with sf() as s:
-        asset_ids = (await s.scalars(select(Asset.id).where(Asset.enabled).order_by(Asset.id))).all()
-    return [await enqueue(sf, registry, clock, asset_id, kind) for asset_id in asset_ids]
+        assets = (await s.execute(select(Asset.id, Asset.provider).where(Asset.enabled).order_by(Asset.id))).all()
+    created = []
+    for asset_id, provider in assets:
+        if registry.find(provider) is None:
+            # One stale asset must not abort the scheduled update for everyone else.
+            log.warning("skipping asset %d: unknown provider %r", asset_id, provider)
+            continue
+        created.append(await enqueue(sf, registry, clock, asset_id, kind))
+    return created
 
 
 async def claim_next(sf: SessionFactory, clock: Clock) -> int | None:

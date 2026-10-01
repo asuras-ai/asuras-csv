@@ -1,6 +1,7 @@
 """HTML routes (Jinja2 + HTMX)."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
@@ -10,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
 
 from app.domain import ProviderError
 from app.models import ACTIVE_STATUSES, Asset, Job
@@ -21,6 +23,7 @@ from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interv
 from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import JobProgress, estimate_text, format_duration, job_progress
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["dt"] = lambda value: value.strftime("%Y-%m-%d %H:%M") if value else "—"
@@ -29,6 +32,11 @@ templates.env.filters["duration"] = format_duration
 
 def services(request: Request):
     return request.app.state.services
+
+
+def message_page(message: str, status_code: int) -> HTMLResponse:
+    html = f'<p class="error">{escape(message)}</p><p><a href="/">Back to assets</a></p>'
+    return HTMLResponse(html, status_code=status_code)
 
 
 def redirect(url: str) -> RedirectResponse:
@@ -171,7 +179,10 @@ async def create(
 @router.post("/assets/update-all")
 async def update_all(request: Request):
     svc = services(request)
-    await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
+    try:
+        await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
+    except ProviderError:
+        log.warning("update-all failed", exc_info=True)
     return redirect("/")
 
 
@@ -180,7 +191,10 @@ async def update_one(request: Request, asset_id: int):
     svc = services(request)
     if await asset_service.get_asset(svc.sf, asset_id) is None:
         raise HTTPException(404, "Asset not found")
-    await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
+    try:
+        await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
+    except ProviderError as exc:
+        return message_page(f"Cannot update this asset: {exc}", 400)
     return redirect("/")
 
 
@@ -282,17 +296,18 @@ async def candles_json(request: Request, asset_id: int, range: Annotated[str, Qu
 async def export_zip(request: Request, ids: Annotated[list[int] | None, Query()] = None, start: str | None = None, end: str | None = None):
     svc = services(request)
     if not ids:
-        raise HTTPException(400, "Select at least one asset")
+        return message_page("Select at least one asset.", 400)
     start_dt, end_dt = day_bounds(_parse_day(start), _parse_day(end))
     assets = [await _asset_or_404(svc, asset_id) for asset_id in dict.fromkeys(ids)]
     tmp = await build_zip(svc.sf, assets, start_dt, end_dt)
     if tmp is None:
-        raise HTTPException(404, "No candles in this range for the selected assets")
+        return message_page("No candles in this range for the selected assets.", 404)
     filename = f"ohlcv-export-{datetime.now(UTC):%Y%m%d-%H%M%S}.zip"
     return StreamingResponse(
         iter_and_close(tmp),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(tmp.close),
     )
 
 

@@ -13,6 +13,10 @@
 (function () {
   var url = "/assets/{{ asset.id }}/candles.json";
   var el = document.getElementById("chart"), status = document.getElementById("status");
+  if (!window.LightweightCharts) {
+    status.textContent = "Chart library failed to load";
+    return;
+  }
   var dark = window.matchMedia("(prefers-color-scheme: dark)");
   function theme() {
     var d = dark.matches;
@@ -28,8 +32,8 @@
   var volume = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
   chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
   dark.addEventListener("change", function () { chart.applyOptions(theme()); });
-  window.addEventListener("resize", function () { chart.applyOptions({ width: el.clientWidth }); });
-  new ResizeObserver(function () { chart.applyOptions({ width: el.clientWidth }); }).observe(el);
+  function fit() { chart.applyOptions({ width: el.clientWidth }); }
+  if (window.ResizeObserver) { new ResizeObserver(fit).observe(el); } else { window.addEventListener("resize", fit); }
 
   var token = 0;
   function load(range) {

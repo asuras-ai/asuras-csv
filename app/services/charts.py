@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import Float, func, select
+from sqlalchemy import DateTime, Float, func, literal, select
 
 from app.db import SessionFactory
 from app.models import CandleRow
-from app.services.export import _valid
+from app.services.export import valid_candle
 
 MAX_BARS = 2000
 
@@ -43,12 +43,19 @@ async def candles_for_chart(sf: SessionFactory, asset_id: int, range_name: str) 
     async with sf() as s:
         first, last = (
             await s.execute(
-                select(func.min(CandleRow.ts), func.max(CandleRow.ts)).where(CandleRow.asset_id == asset_id, _valid())
+                select(func.min(CandleRow.ts), func.max(CandleRow.ts)).where(CandleRow.asset_id == asset_id, valid_candle())
             )
         ).one()
         if last is None:
             return pick_bucket(range_name, 0), []
-        start: datetime = first if window is None else last - window
+        start: datetime = first
+        if window is not None:
+            target = last - window
+            # Floor to the bucket boundary so the first bar is a full bucket. When the target already sits on a
+            # boundary the window is exclusive of it (1D of 1m bars is 1440 bars, not 1441).
+            start = await s.scalar(select(func.time_bucket(RANGES[range_name][1], literal(target, DateTime(timezone=True)))))
+            if start == target:
+                start += RANGES[range_name][1]
         bucket = pick_bucket(range_name, (last - start).total_seconds() / 86400 + 1)
         b = func.time_bucket(bucket, CandleRow.ts).label("b")
         stmt = (
@@ -60,7 +67,7 @@ async def candles_for_chart(sf: SessionFactory, asset_id: int, range_name: str) 
                 func.last(CandleRow.close, CandleRow.ts, type_=Float),
                 func.sum(CandleRow.volume),
             )
-            .where(CandleRow.asset_id == asset_id, CandleRow.ts >= start, CandleRow.ts <= last, _valid())
+            .where(CandleRow.asset_id == asset_id, CandleRow.ts >= start, CandleRow.ts <= last, valid_candle())
             .group_by(b)
             .order_by(b.desc())
             .limit(MAX_BARS + 50)

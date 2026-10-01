@@ -307,3 +307,11 @@ async def test_prune_never_touches_active_jobs(sf, clock):
         await _insert_finished(sf, asset.id, "done", old)  # newer id, so the active job is not the asset's latest
     await jobs.prune(sf, clock)
     assert [await jobs.get_job(sf, i) is not None for i in ids] == [True] * 4
+
+
+async def test_enqueue_all_skips_assets_with_an_unknown_provider(sf, registry, clock, caplog):
+    stale = await make_asset(sf, provider="gone", provider_symbol="OLD", jesse_symbol="OLD-USD")
+    good = await make_asset(sf, provider_symbol="B", jesse_symbol="B-USD")
+    created = await jobs.enqueue_all(sf, registry, clock)
+    assert [j.asset_id for j in created] == [good.id]
+    assert str(stale.id) in caplog.text and "gone" in caplog.text

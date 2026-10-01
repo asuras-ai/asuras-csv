@@ -86,3 +86,36 @@ async def test_chart_page(client, sf):
         assert f'data-range="{label}"' in page.text
     assert (await client.get("/assets/999/chart")).status_code == 404
     assert f'/assets/{asset.id}/chart' in (await client.get("/")).text
+
+
+async def test_one_day_window_has_exactly_1440_full_bars(client, sf):
+    asset = await make_asset(sf)
+    last = datetime(2024, 3, 3, 12, 0, tzinfo=UTC)
+    await seed(sf, asset.id, [Candle(last - timedelta(minutes=m), 1, 2, 1, 1, 1) for m in range(3 * 1440)])
+    body = (await client.get(f"/assets/{asset.id}/candles.json?range=1D")).json()
+    assert len(body["candles"]) == 1440
+    assert body["candles"][0]["time"] == int((last - timedelta(days=1) + timedelta(minutes=1)).timestamp())
+    assert body["candles"][-1]["time"] == int(last.timestamp())
+
+
+async def test_first_bucket_is_full_when_window_start_is_not_on_a_boundary(client, sf):
+    asset = await make_asset(sf)
+    last = datetime(2024, 3, 8, 10, 3, tzinfo=UTC)  # 1W window start 10:03 falls inside the 10:00 5m bucket
+    await seed(sf, asset.id, [Candle(last - timedelta(minutes=m), 1, 2, 1, 1, 1) for m in range(9 * 1440)])
+    body = (await client.get(f"/assets/{asset.id}/candles.json?range=1W")).json()
+    first = body["candles"][0]
+    assert first["time"] % 300 == 0 and first["volume"] == 5
+    assert all(c["volume"] == 5 for c in body["candles"][:-1])
+
+
+def test_valid_candle_is_public():
+    from app.services.export import valid_candle
+
+    assert callable(valid_candle)
+
+
+async def test_chart_page_guards_missing_library_and_resize_listener(client, sf):
+    asset = await make_asset(sf)
+    text = (await client.get(f"/assets/{asset.id}/chart")).text
+    assert "Chart library failed to load" in text
+    assert text.count('addEventListener("resize"') == 1  # only the ResizeObserver fallback

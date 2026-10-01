@@ -150,3 +150,25 @@ async def test_assets_page_tbody_polls_with_the_same_rule(client, sf, clock):
     await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
     page = (await client.get("/")).text
     assert 'hx-trigger="every 2s"' in page and 'hx-get="/assets/rows"' in page
+
+
+async def test_update_one_with_unknown_provider_shows_a_message_not_a_500(client, sf):
+    stale = await make_asset(sf, provider="gone", provider_symbol="OLD", jesse_symbol="OLD-USD")
+    r = await client.post(f"/assets/{stale.id}/update")
+    assert r.status_code == 400 and "gone" in r.text
+
+
+async def test_update_all_survives_a_provider_error(client, sf, monkeypatch):
+    from app.domain import PermanentError
+
+    async def boom(*args, **kwargs):
+        raise PermanentError("provider exploded")
+
+    monkeypatch.setattr(jobs, "enqueue_all", boom)
+    r = await client.post("/assets/update-all")
+    assert r.status_code == 303
+
+
+async def test_update_all_skips_unknown_provider_assets(client, sf):
+    await make_asset(sf, provider="gone", provider_symbol="OLD", jesse_symbol="OLD-USD")
+    assert (await client.post("/assets/update-all")).status_code == 303

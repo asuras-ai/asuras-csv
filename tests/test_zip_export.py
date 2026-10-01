@@ -61,7 +61,10 @@ async def test_zip_404_when_no_data_or_unknown_or_bad_input(client, sf):
     r = await client.get("/export.zip", params={"ids": [a.id], "start": "2030-01-01"})
     assert r.status_code == 404 and "No candles" in r.text
     assert (await client.get("/export.zip", params={"ids": [a.id, 999]})).status_code == 404
-    assert (await client.get("/export.zip")).status_code == 400
+    empty = await client.get("/export.zip")
+    assert empty.status_code == 400 and empty.headers["content-type"].startswith("text/html")
+    assert "Select at least one asset" in empty.text and "<" in empty.text
+    assert r.headers["content-type"].startswith("text/html")
     assert (await client.get("/export.zip", params={"ids": [a.id], "start": "nope"})).status_code == 400
 
 
@@ -87,3 +90,27 @@ async def test_assets_page_has_selection_checkboxes_that_survive_polling(client,
         assert f'name="ids" value="{a.id}"' in html and f'id="sel-{a.id}"' in html and "hx-preserve" in html
     page = (await client.get("/")).text
     assert 'id="zip-form"' in page and 'action="/export.zip"' in page and 'method="get"' in page
+
+
+async def test_zip_form_has_optional_date_inputs_and_empty_selection_guard(client, sf):
+    await make_asset(sf)
+    page = (await client.get("/")).text
+    assert 'name="start"' in page and 'name="end"' in page
+    assert "Select at least one asset" in page  # inline JS guard message
+
+
+async def test_zip_temp_file_is_closed_by_a_background_task(client, sf, monkeypatch):
+    import tempfile
+
+    created = []
+    real = tempfile.SpooledTemporaryFile
+
+    def tracking(*args, **kwargs):
+        f = real(*args, **kwargs)
+        created.append(f)
+        return f
+
+    monkeypatch.setattr(tempfile, "SpooledTemporaryFile", tracking)
+    a, _ = await two_assets(sf)
+    r = await client.get("/export.zip", params={"ids": [a.id]})
+    assert r.status_code == 200 and created and all(f.closed for f in created)
