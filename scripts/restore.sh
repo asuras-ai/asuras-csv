@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore a dump made by backup.sh, REPLACING the ohlcv database. Follows TimescaleDB's documented procedure
 # (fresh database, timescaledb_pre_restore, pg_restore without --clean, timescaledb_post_restore) and fails safe:
-#   1. the dump is validated first (pg_restore -l); nothing is touched if that fails
+#   1. the dump is validated first (pg_restore -l, then a full dry run with pg_restore -f /dev/null); nothing is touched if that fails
 #   2. a safety backup of the current database is taken (scripts/backup.sh, KEEP=0)
 #   3. on any failure the app stays STOPPED and the safety dump path plus the command to restore it are printed
 # Usage: scripts/restore.sh <dumpfile> [--yes] [--force]
@@ -41,6 +41,12 @@ psql_in() { local db="$1"; shift; "${dc[@]}" exec -T db psql -U ohlcv -d "$db" -
 # 1. Validate the dump before changing anything.
 if ! "${dc[@]}" exec -T db pg_restore -l < "$file" > /dev/null; then
   echo "error: $file is not a valid pg_dump custom-format archive; nothing was changed" >&2
+  exit 1
+fi
+
+# Full dry run: read and decompress the whole archive without touching any database (catches truncation).
+if ! "${dc[@]}" exec -T db pg_restore -f /dev/null < "$file"; then
+  echo "error: dump is damaged or truncated ($file); nothing was changed" >&2
   exit 1
 fi
 
