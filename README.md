@@ -24,6 +24,29 @@ Enable scheduled updates under **Settings**.
 change the password inside Postgres (`ALTER USER ohlcv PASSWORD '...'`) or recreate the volume
 (`docker compose down -v`, which deletes all stored candles).
 
+## Backup & restore
+
+```bash
+scripts/backup.sh                      # writes backups/ohlcv-YYYYmmdd-HHMMSS.dump, keeps the newest 7
+KEEP=14 scripts/backup.sh              # keep the newest 14 instead
+PROJECT=myproject scripts/backup.sh    # target a non-default compose project
+```
+
+The scripts work from any directory and need the `db` container running. Nightly backup at 03:00 via cron:
+
+```
+0 3 * * * /path/to/repo/scripts/backup.sh
+```
+
+Restore:
+
+```bash
+scripts/restore.sh backups/ohlcv-20261001-030000.dump          # asks you to type "restore"
+scripts/restore.sh backups/ohlcv-20261001-030000.dump --yes    # no prompt
+```
+
+**Warning:** restoring REPLACES all current data in the database with the dump. The script stops the `app` service, runs `timescaledb_pre_restore()`, `pg_restore --clean --if-exists`, then `timescaledb_post_restore()`, and starts the app again. Copy dumps off the machine too; `backups/` lives next to the database.
+
 ## Security
 
 The app has no authentication. Keep it on your LAN and do not expose it to the internet. It also rejects
