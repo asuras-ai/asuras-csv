@@ -67,6 +67,8 @@ async def test_stats_are_cached_until_ttl_or_invalidation(sf, clock):
     await seed(sf, asset.id, [3])
     assert (await cache.get(sf))[asset.id].count == 3
     clock.advance(61)
+    assert (await cache.get(sf))[asset.id].count == 3  # expired: stale value now, refresh in the background
+    await cache._inflight[1]
     assert (await cache.get(sf))[asset.id].count == 4
     await seed(sf, asset.id, [4])
     cache.invalidate()
@@ -181,3 +183,74 @@ async def test_stats_invalidated_mid_load_is_not_cached_as_fresh(sf, clock):
     await cache.get(lambda: InvalidatingSession(sf()))
     await seed(sf, asset.id, [1])
     assert (await cache.get(sf))[asset.id].count == 2  # reloaded, stale result was not stored
+
+
+class CountingSessionFactory:
+    """Wraps a session factory, counting sessions and optionally pausing inside the query."""
+
+    def __init__(self, sf, gate=None):
+        self._sf = sf
+        self.opened = 0
+        self.gate = gate
+
+    def __call__(self):
+        self.opened += 1
+        return GatedSession(self._sf(), self.gate)
+
+
+class GatedSession:
+    def __init__(self, session, gate):
+        self._session = session
+        self._gate = gate
+
+    async def __aenter__(self):
+        self._inner = await self._session.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc):
+        return await self._session.__aexit__(*exc)
+
+    async def execute(self, *args, **kwargs):
+        if self._gate is not None:
+            await self._gate.wait()
+        return await self._inner.execute(*args, **kwargs)
+
+
+async def test_concurrent_first_loads_share_one_query(sf, clock):
+    import asyncio
+
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0, 1])
+    gate = asyncio.Event()
+    counting = CountingSessionFactory(sf, gate)
+    cache = StatsCache(clock, ttl_seconds=30)
+    callers = [asyncio.create_task(cache.get(counting)) for _ in range(5)]
+    await asyncio.sleep(0.05)
+    gate.set()
+    results = await asyncio.gather(*callers)
+    assert counting.opened == 1
+    assert all(r[asset.id].count == 2 for r in results)
+
+
+async def test_expired_value_is_served_stale_while_one_refresh_runs(sf, clock):
+    import asyncio
+
+    asset = await make_asset(sf)
+    await seed(sf, asset.id, [0])
+    cache = StatsCache(clock, ttl_seconds=30)
+    assert (await cache.get(sf))[asset.id].count == 1
+    await seed(sf, asset.id, [1])
+    clock.advance(31)
+    gate = asyncio.Event()
+    counting = CountingSessionFactory(sf, gate)
+    stale = await asyncio.wait_for(asyncio.gather(*[cache.get(counting) for _ in range(3)]), timeout=1)
+    assert all(r[asset.id].count == 1 for r in stale)  # returned immediately, without waiting for the query
+    gate.set()
+    await asyncio.sleep(0.2)
+    assert counting.opened == 1
+    assert (await cache.get(counting))[asset.id].count == 2
+    assert counting.opened == 1
+
+
+async def test_default_ttl_is_30_seconds():
+    assert StatsCache(None)._ttl == 30.0

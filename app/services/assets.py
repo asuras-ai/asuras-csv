@@ -1,6 +1,7 @@
 """Asset CRUD and cached per-asset candle statistics."""
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -90,33 +91,57 @@ EMPTY_STATS = AssetStats(None, None, 0)
 
 
 class StatsCache:
-    """Counting candles scans the whole table, so results are reused for `ttl_seconds`."""
+    """Counting candles scans the whole table, so results are reused for `ttl_seconds`.
 
-    def __init__(self, clock: Clock | None, ttl_seconds: float = 120.0):
+    Refreshes are single-flight: concurrent callers share one query. When an expired value exists it is served
+    immediately while the refresh runs in the background; only the first-ever (or invalidated) load waits.
+    """
+
+    def __init__(self, clock: Clock | None, ttl_seconds: float = 30.0):
         self._clock = clock
         self._ttl = ttl_seconds
         self._value: dict[int, AssetStats] | None = None
         self._loaded_at = 0.0
         self._generation = 0
+        self._inflight: tuple[int, asyncio.Task] | None = None
 
     def invalidate(self) -> None:
         self._generation += 1
         self._value = None
 
-    async def get(self, sf: SessionFactory) -> dict[int, AssetStats]:
-        now = self._clock.monotonic() if self._clock else 0.0
-        if self._value is None or self._clock is None or now - self._loaded_at > self._ttl:
-            generation = self._generation
-            async with sf() as s:
-                rows = await s.execute(
-                    select(CandleRow.asset_id, func.min(CandleRow.ts), func.max(CandleRow.ts), func.count()).group_by(
-                        CandleRow.asset_id
-                    )
+    def _now(self) -> float:
+        return self._clock.monotonic() if self._clock else 0.0
+
+    async def _load(self, sf: SessionFactory, generation: int) -> dict[int, AssetStats]:
+        started = self._now()
+        async with sf() as s:
+            rows = await s.execute(
+                select(CandleRow.asset_id, func.min(CandleRow.ts), func.max(CandleRow.ts), func.count()).group_by(
+                    CandleRow.asset_id
                 )
-                value = {asset_id: AssetStats(first, last, count) for asset_id, first, last, count in rows}
-            if generation != self._generation:
-                return value  # invalidated mid-load: serve it once, but do not cache it as fresh
-            self._value = value
-            self._loaded_at = now
-            return value
-        return self._value
+            )
+            value = {asset_id: AssetStats(first, last, count) for asset_id, first, last, count in rows}
+        if generation == self._generation and self._clock is not None:
+            self._value = value  # invalidated mid-load: serve it once, but do not cache it as fresh
+            self._loaded_at = started
+        return value
+
+    def _refresh(self, sf: SessionFactory) -> asyncio.Task:
+        if self._inflight is not None:
+            generation, task = self._inflight
+            if generation == self._generation and not task.done():
+                return task
+        generation = self._generation
+        task = asyncio.create_task(self._load(sf, generation), name="stats-refresh")
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())  # never leave an unretrieved exception
+        self._inflight = (generation, task)
+        return task
+
+    async def get(self, sf: SessionFactory) -> dict[int, AssetStats]:
+        if self._value is not None and self._clock is not None:
+            if self._now() - self._loaded_at <= self._ttl:
+                return self._value
+            stale = self._value
+            self._refresh(sf)
+            return stale
+        return await asyncio.shield(self._refresh(sf))

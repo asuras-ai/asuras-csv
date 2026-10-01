@@ -209,7 +209,7 @@ APScheduler runs in the app process. When `schedule_enabled` is set, it runs on 
 - **Jobs:** the last 200 jobs with asset, kind, status, progress, requests made, candles added, duration, error, and a Cancel action for active jobs.
 - **Settings:** schedule on/off plus cron preset, worker concurrency,, Alpaca key/secret and Twelve Data key (masked; shows "set via environment" when env vars are present, which makes them read-only in the UI).
 
-Candle count and first/last candle per asset come from one aggregate query per asset list render, cached for a short time if it is slow.
+Candle count and first/last candle per asset come from one aggregate query, cached for 30 s. Refreshes are single-flight (concurrent callers share one query); an expired value is served immediately while the refresh runs, and only the first load waits. The cache is invalidated whenever the worker finishes, fails or yields a job slice (`Worker.on_progress`), so counts catch up within seconds of a download finishing.
 
 ## Testing
 
