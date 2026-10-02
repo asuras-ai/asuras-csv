@@ -317,11 +317,29 @@ async def export_zip(request: Request, ids: Annotated[list[int] | None, Query()]
     )
 
 
+JobFilter = Annotated[str | None, Query(pattern="^(active|failed)$")]
+
+
+async def _jobs_context(svc, status: str | None) -> dict:
+    counts = await jobs.status_counts(svc.sf)
+    active_count = sum(counts.get(s, 0) for s in ACTIVE_STATUSES)
+    return {
+        "rows": job_rows(svc, await jobs.list_recent(svc.sf, status=status)),
+        "status": status,
+        "active_count": active_count,
+        "failed_count": counts.get("failed", 0),
+        "active": active_count > 0,
+    }
+
+
 @router.get("/jobs", response_class=HTMLResponse)
-async def jobs_page(request: Request):
-    svc = services(request)
-    rows = job_rows(svc, await jobs.list_recent(svc.sf))
-    return templates.TemplateResponse(request, "jobs.html", {"rows": rows, "active_statuses": ACTIVE_STATUSES})
+async def jobs_page(request: Request, status: JobFilter = None):
+    return templates.TemplateResponse(request, "jobs.html", await _jobs_context(services(request), status))
+
+
+@router.get("/jobs/rows", response_class=HTMLResponse)
+async def jobs_rows(request: Request, status: JobFilter = None):
+    return templates.TemplateResponse(request, "_jobs_tbody.html", await _jobs_context(services(request), status))
 
 
 @router.post("/jobs/{job_id}/cancel")

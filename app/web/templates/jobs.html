@@ -1,41 +1,23 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_pill %}
+{% set page_title = "Jobs" %}{% set active_nav = "jobs" %}
+{% block actions %}
+<nav class="segmented" aria-label="Filter jobs">
+  <a href="/jobs"{% if not status %} class="active"{% endif %}>All</a>
+  <a href="/jobs?status=active"{% if status == "active" %} class="active"{% endif %}>Active <span class="count">{{ active_count }}</span></a>
+  <a href="/jobs?status=failed"{% if status == "failed" %} class="active"{% endif %}>Failed <span class="count">{{ failed_count }}</span></a>
+</nav>
+{% endblock %}
 {% block content %}
-<h2>Jobs</h2>
-<div class="overflow-auto">
-<table class="striped">
-  <thead>
-    <tr>
-      <th>#</th><th>Asset</th><th>Kind</th><th>Status</th><th>Range (UTC)</th><th>Requests</th>
-      <th>Candles added</th><th>Run time</th><th>Created</th><th>Finished</th><th></th>
-    </tr>
-  </thead>
-  <tbody>
-  {% for row in rows %}
-    <tr>
-      <td>{{ row.job.id }}</td>
-      <td>{{ row.asset.jesse_symbol }}</td>
-      <td>{{ row.job.kind }}</td>
-      <td>{{ status_pill(row.job, row.progress) }}</td>
-      <td>{{ row.job.range_start|dt }} → {{ row.job.range_end|dt }}</td>
-      <td>{{ "{:,}".format(row.job.requests_made) }}</td>
-      <td>{{ "{:,}".format(row.job.candles_added) }}</td>
-      <td>{{ row.job.run_seconds|duration }}</td>
-      <td>{{ row.job.created_at|dt }}</td>
-      <td>{{ row.job.finished_at|dt }}</td>
-      <td class="actions">
-        {% if row.job.status in active_statuses %}
-        <form method="post" action="/jobs/{{ row.job.id }}/cancel">
-          <input type="hidden" name="next" value="/jobs">
-          <button class="secondary outline">Cancel</button>
-        </form>
-        {% endif %}
-      </td>
-    </tr>
-  {% else %}
-    <tr><td colspan="11">No jobs yet.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="card card-scroll">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>#</th><th>Asset</th><th>Kind</th><th>Status</th><th>Range (UTC)</th><th class="num">Requests</th>
+        <th class="num">Candles added</th><th>Run time</th><th>Created</th><th>Finished</th><th><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    {% include "_jobs_tbody.html" %}
+  </table>
 </div>
+<p class="muted small">Times are UTC. Finished jobs are kept for 30 days.</p>
 {% endblock %}
