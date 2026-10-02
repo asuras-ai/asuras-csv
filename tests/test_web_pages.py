@@ -38,7 +38,9 @@ async def test_delete_asset(client, sf):
         await insert_candles(s, asset.id, [Candle(T0, 1, 2, 0.5, 1.5, 10)])
     r = await client.get(f"/assets/{asset.id}/delete")
     assert r.status_code == 200 and "FAKE-USD" in r.text
-    assert (await client.post(f"/assets/{asset.id}/delete")).status_code == 303
+    assert "Delete FAKE-USD?" in r.text and "btn-danger-solid" in r.text and f'href="/assets/{asset.id}"' in r.text
+    r = await client.post(f"/assets/{asset.id}/delete")
+    assert r.status_code == 303 and r.headers["location"] == "/assets"
     assert await get_asset(sf, asset.id) is None
     async with sf() as s:
         remaining = (await s.execute(select(func.count()).select_from(CandleRow).where(CandleRow.asset_id == asset.id))).scalar_one()
@@ -86,7 +88,10 @@ async def test_settings_roundtrip(client):
     page = (await client.get("/settings")).text
     assert "0 */6 * * *" in page and "•••• 1234" in page and "s3cr3t-value" not in page
     r = await client.post("/settings", data={"schedule_cron": "bad", "worker_concurrency": "2"})
-    assert r.status_code == 400 and 'class="error"' in r.text
+    assert r.status_code == 400 and 'class="alert alert-danger"' in r.text
+    page = (await client.get("/settings")).text
+    assert 'id="settings-form"' in page and 'form="settings-form"' in page and 'class="switch"' in page
+    assert 'href="/settings" aria-current="page"' in page
 
 
 @pytest.mark.parametrize("target", ["//evil.com", "/\\evil.com", "https://evil.com"])

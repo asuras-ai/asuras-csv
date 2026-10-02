@@ -1,9 +1,16 @@
 {% extends "base.html" %}
+{% set page_title = "Delete " ~ asset.jesse_symbol %}{% set active_nav = "assets" %}
+{% block crumb %}<a class="crumb" href="/assets/{{ asset.id }}">{{ asset.jesse_symbol }} /</a>{% endblock %}
+{% block heading %}Delete asset{% endblock %}
 {% block content %}
-<h2>Delete {{ asset.jesse_symbol }}?</h2>
-<p>This removes the asset, its jobs and all {{ "{:,}".format(count) }} stored candles. This cannot be undone.</p>
-<form method="post">
-  <button type="submit" class="contrast">Delete</button>
-  <a href="/" role="button" class="secondary">Cancel</a>
-</form>
+<div class="card confirm">
+  <div class="card-body stack-sm">
+    <h2 class="danger-title">Delete {{ asset.jesse_symbol }}?</h2>
+    <p>This removes the asset, its jobs and all {{ count|num }} stored candles. This cannot be undone.</p>
+    <form class="form-actions" method="post" action="/assets/{{ asset.id }}/delete">
+      <button type="submit" class="btn btn-danger-solid">{{ icon("trash-2") }}Delete</button>
+      <a class="btn" href="/assets/{{ asset.id }}">Cancel</a>
+    </form>
+  </div>
+</div>
 {% endblock %}

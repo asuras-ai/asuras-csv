@@ -1,45 +1,55 @@
 {% extends "base.html" %}
+{% from "_macros.html" import alert %}
+{% set page_title = "Settings" %}{% set active_nav = "settings" %}
+{% block actions %}<button class="btn btn-primary" type="submit" form="settings-form">Save changes</button>{% endblock %}
 {% block content %}
-<h2>Settings</h2>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-<form method="post">
-  <fieldset>
-    <legend><strong>Scheduled updates</strong></legend>
-    <label><input type="checkbox" role="switch" name="schedule_enabled" {% if s.schedule_enabled %}checked{% endif %}>
-      Update all enabled assets on a schedule</label>
-    <label>Schedule (cron, UTC)
-      <input name="schedule_cron" value="{{ s.schedule_cron }}" list="cron-presets" required>
-      <datalist id="cron-presets">
-        {% for value, label in presets %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-      </datalist>
-    </label>
-    <small class="muted">
-      Presets: {% for value, label in presets %}<code>{{ value }}</code> {{ label }}{% if not loop.last %} · {% endif %}{% endfor %}.
-      {% if next_run %}Next run: {{ next_run|dt }} UTC.{% endif %}
-    </small>
-  </fieldset>
-  <label>Parallel downloads (1–10)
-    <input type="number" name="worker_concurrency" min="1" max="10" value="{{ s.worker_concurrency }}" required>
-  </label>
-  <fieldset>
-    <legend><strong>Alpaca API key</strong> <span class="muted">(free account at alpaca.markets)</span></legend>
-    {% if s.alpaca_from_env %}
-    <p class="muted">Set through environment variables (ALPACA_KEY_ID / ALPACA_SECRET_KEY). Edit your .env file to change it.</p>
-    {% else %}
-    <p class="muted">Current key: {{ key_hint }}. Leave the fields blank to keep it.</p>
-    <label>Key ID <input name="alpaca_key_id" autocomplete="off"></label>
-    <label>Secret key <input type="password" name="alpaca_secret_key" autocomplete="off"></label>
-    {% endif %}
-  </fieldset>
-  <fieldset>
-    <legend><strong>Twelve Data API key</strong> <span class="muted">(free key at twelvedata.com, email signup)</span></legend>
-    {% if s.twelvedata_from_env %}
-    <p class="muted">Key set through the TWELVEDATA_API_KEY environment variable. Edit your .env file to change it.</p>
-    {% else %}
-    <p class="muted">Current key: {{ twelvedata_hint }}. Leave the key blank to keep it.</p>
-    <label>API key <input type="password" name="twelvedata_api_key" autocomplete="off"></label>
-    {% endif %}
-  </fieldset>
-  <button type="submit">Save</button>
+<form id="settings-form" class="stack page-narrow" method="post" action="/settings">
+  {{ alert(error) }}
+  <section class="card">
+    <div class="card-header"><div><h2>Scheduled updates</h2><p>Update all enabled assets automatically.</p></div></div>
+    <div class="card-body form-grid">
+      <label class="check full"><input type="checkbox" class="switch" name="schedule_enabled" {% if s.schedule_enabled %}checked{% endif %}> Enabled</label>
+      <div class="field">
+        <label for="schedule_cron">Schedule (cron, UTC)</label>
+        <input class="input" id="schedule_cron" name="schedule_cron" value="{{ s.schedule_cron }}" list="cron-presets" required>
+        <datalist id="cron-presets">{% for value, label in presets %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</datalist>
+        <span class="hint">Presets: {% for value, label in presets %}<code>{{ value }}</code> {{ label }}{% if not loop.last %} · {% endif %}{% endfor %}.{% if next_run %} Next run {{ next_run|dt }} UTC.{% endif %}</span>
+      </div>
+      <div class="field">
+        <label for="worker_concurrency">Parallel downloads</label>
+        <input class="input" type="number" id="worker_concurrency" name="worker_concurrency" min="1" max="10" value="{{ s.worker_concurrency }}" required>
+        <span class="hint">1–10 assets download at the same time.</span>
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-header"><div><h2>Alpaca</h2><p>US stocks &amp; ETFs · free account at alpaca.markets</p></div></div>
+    <div class="card-body">
+      {% if s.alpaca_from_env %}
+      <div class="callout callout-muted">{{ icon("lock") }}<span>Set through environment variables (ALPACA_KEY_ID / ALPACA_SECRET_KEY). Edit your .env file to change it.</span></div>
+      {% else %}
+      <div class="form-grid">
+        <div class="field"><label for="alpaca_key_id">Key ID</label><input class="input" id="alpaca_key_id" name="alpaca_key_id" autocomplete="off"></div>
+        <div class="field"><label for="alpaca_secret_key">Secret key</label><input class="input" type="password" id="alpaca_secret_key" name="alpaca_secret_key" autocomplete="off"></div>
+        <p class="hint full">Current key: {{ key_hint }}. Leave the fields blank to keep it.</p>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-header"><div><h2>Twelve Data</h2><p>US stocks, forex &amp; metals · free key at twelvedata.com (email signup) · 800 requests/day</p></div></div>
+    <div class="card-body">
+      {% if s.twelvedata_from_env %}
+      <div class="callout callout-muted">{{ icon("lock") }}<span>Key set through the TWELVEDATA_API_KEY environment variable. Edit your .env file to change it.</span></div>
+      {% else %}
+      <div class="field">
+        <label for="twelvedata_api_key">API key</label>
+        <input class="input" type="password" id="twelvedata_api_key" name="twelvedata_api_key" autocomplete="off">
+        <span class="hint">Current key: {{ twelvedata_hint }}. Leave the key blank to keep it.</span>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+  <div class="form-actions"><button class="btn btn-primary" type="submit">Save changes</button></div>
 </form>
 {% endblock %}
