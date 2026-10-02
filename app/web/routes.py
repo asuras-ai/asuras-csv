@@ -19,7 +19,7 @@ from app.services.export import day_bounds, export_filename, export_range, strea
 from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
 from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import estimate_text
-from app.web.rows import job_rows, load_asset_rows
+from app.web.rows import job_rows, load_asset_row, load_asset_rows
 from app.web.ui import redirect, safe_next, templates
 
 log = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ async def create(
         return _new_page(request, str(exc), 400)
     await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset.id, "backfill")
     svc.stats.invalidate()
-    return redirect("/assets", notice=f"{asset.jesse_symbol} added, download queued")
+    return redirect(f"/assets/{asset.id}", notice=f"{asset.jesse_symbol} added, download queued")
 
 
 @router.post("/assets/update-all")
@@ -181,10 +181,55 @@ async def _asset_or_404(svc, asset_id: int) -> Asset:
     return asset
 
 
-@router.get("/assets/{asset_id}/edit", response_class=HTMLResponse)
+async def _live_context(svc, asset: Asset) -> dict:
+    row = await load_asset_row(svc, asset)
+    history = job_rows(svc, await jobs.list_recent(svc.sf, limit=10, asset_id=asset.id))
+    active = row.job is not None and row.job.status in ACTIVE_STATUSES
+    return {"asset": asset, "row": row, "history": history, "active": active}
+
+
+async def _detail_page(request: Request, asset: Asset, error: str | None = None, form_symbol: str | None = None, status_code: int = 200):
+    svc = services(request)
+    context = await _live_context(svc, asset) | {
+        "rng": await export_range(svc.sf, asset.id, None, None),
+        "ranges": list(RANGES),
+        "default_range": DEFAULT_RANGE,
+        "error": error,
+        "form_symbol": form_symbol,
+    }
+    return templates.TemplateResponse(request, "asset_detail.html", context, status_code=status_code)
+
+
+@router.get("/assets/{asset_id:int}", response_class=HTMLResponse)
+async def asset_detail(request: Request, asset_id: int):
+    return await _detail_page(request, await _asset_or_404(services(request), asset_id))
+
+
+@router.get("/assets/{asset_id:int}/live", response_class=HTMLResponse)
+async def asset_live(request: Request, asset_id: int):
+    svc = services(request)
+    context = await _live_context(svc, await _asset_or_404(svc, asset_id))
+    return templates.TemplateResponse(request, "_asset_live.html", context)
+
+
+async def _to_detail(request: Request, asset_id: int, anchor: str):
+    await _asset_or_404(services(request), asset_id)
+    return redirect(f"/assets/{asset_id}#{anchor}")
+
+
+@router.get("/assets/{asset_id}/chart")
+async def chart_page(request: Request, asset_id: int):
+    return await _to_detail(request, asset_id, "chart")
+
+
+@router.get("/assets/{asset_id}/export")
+async def export_page(request: Request, asset_id: int):
+    return await _to_detail(request, asset_id, "export")
+
+
+@router.get("/assets/{asset_id}/edit")
 async def edit_page(request: Request, asset_id: int):
-    asset = await _asset_or_404(services(request), asset_id)
-    return templates.TemplateResponse(request, "asset_edit.html", {"asset": asset, "error": None})
+    return await _to_detail(request, asset_id, "settings")
 
 
 @router.post("/assets/{asset_id}/edit")
@@ -199,8 +244,8 @@ async def edit(
     try:
         await asset_service.update_asset(svc.sf, asset_id, jesse_symbol=jesse_symbol, enabled=enabled is not None)
     except ValueError as exc:
-        return templates.TemplateResponse(request, "asset_edit.html", {"asset": asset, "error": str(exc)}, status_code=400)
-    return redirect("/assets", notice=f"Saved {jesse_symbol.strip()}")
+        return await _detail_page(request, asset, str(exc), jesse_symbol, 400)
+    return redirect(f"/assets/{asset_id}", notice=f"Saved {jesse_symbol.strip()}")
 
 
 @router.get("/assets/{asset_id}/delete", response_class=HTMLResponse)
@@ -218,14 +263,6 @@ async def delete(request: Request, asset_id: int):
     await asset_service.delete_asset(svc.sf, asset_id)
     svc.stats.invalidate()
     return redirect("/assets", notice=f"Deleted {asset.jesse_symbol}")
-
-
-@router.get("/assets/{asset_id}/export", response_class=HTMLResponse)
-async def export_page(request: Request, asset_id: int):
-    svc = services(request)
-    asset = await _asset_or_404(svc, asset_id)
-    rng = await export_range(svc.sf, asset_id, None, None)
-    return templates.TemplateResponse(request, "export.html", {"asset": asset, "rng": rng})
 
 
 def _parse_day(value: str | None) -> date | None:
@@ -251,13 +288,6 @@ async def export_csv(request: Request, asset_id: int, start: str | None = None, 
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
-@router.get("/assets/{asset_id}/chart", response_class=HTMLResponse)
-async def chart_page(request: Request, asset_id: int):
-    asset = await _asset_or_404(services(request), asset_id)
-    context = {"asset": asset, "ranges": list(RANGES), "default_range": DEFAULT_RANGE}
-    return templates.TemplateResponse(request, "chart.html", context)
 
 
 @router.get("/assets/{asset_id}/candles.json")

@@ -23,14 +23,13 @@ T0 = datetime(2024, 1, 1, tzinfo=UTC)
 
 async def test_edit_asset(client, sf):
     asset = await make_asset(sf)
-    assert (await client.get(f"/assets/{asset.id}/edit")).status_code == 200
     r = await client.post(f"/assets/{asset.id}/edit", data={"jesse_symbol": "NEW-USD"})
-    assert r.status_code == 303
+    assert r.status_code == 303 and r.headers["location"] == f"/assets/{asset.id}"
     got = await get_asset(sf, asset.id)
     assert (got.jesse_symbol, got.enabled) == ("NEW-USD", False)
     r = await client.post(f"/assets/{asset.id}/edit", data={"jesse_symbol": "bad", "enabled": "on"})
     assert r.status_code == 400 and "Jesse symbol" in r.text
-    assert (await client.get("/assets/999/edit")).status_code == 404
+    assert (await client.post("/assets/999/edit", data={"jesse_symbol": "X-USD"})).status_code == 404
 
 
 async def test_delete_asset(client, sf):
@@ -50,7 +49,7 @@ async def test_export_downloads_jesse_csv(client, sf):
     asset = await make_asset(sf)
     async with sf.begin() as s:
         await insert_candles(s, asset.id, [Candle(T0 + timedelta(minutes=m), 1, 2, 0.5, 1.5, 10) for m in (0, 1)])
-    page = await client.get(f"/assets/{asset.id}/export")
+    page = await client.get(f"/assets/{asset.id}")
     assert 'value="2024-01-01"' in page.text
     r = await client.get(f"/assets/{asset.id}/export.csv", params={"start": "2024-01-01", "end": "2024-01-01"})
     assert r.headers["content-type"].startswith("text/csv")

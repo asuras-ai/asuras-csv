@@ -1,0 +1,4 @@
+{% from "_asset_parts.html" import status_region, details_card, jobs_card %}
+{{ status_region(asset, row, active) }}
+{{ details_card(asset, row, oob=True) }}
+{{ jobs_card(history, now, oob=True) }}

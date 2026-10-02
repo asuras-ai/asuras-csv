@@ -39,6 +39,7 @@ async def test_search_details_and_estimate(client):
 async def test_adding_an_asset_queues_a_backfill(client, sf):
     r = await client.post("/assets", data=FORM)
     assert r.status_code == 303
+    assert r.headers["location"] == "/assets/1"
     rows = (await client.get("/assets/rows")).text
     assert "FAKE-USD" in rows and "queued" in rows
     [job] = (await jobs.latest_jobs_by_asset(sf)).values()
