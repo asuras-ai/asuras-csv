@@ -9,6 +9,7 @@ from app.providers.base import ProviderRegistry
 from app.scheduler import UpdateScheduler
 from app.services.assets import StatsCache
 from app.services.settings import SettingsService
+from app.services.sparklines import SparklineCache
 from app.worker import Worker
 
 
@@ -20,5 +21,6 @@ class Services:
     registry: ProviderRegistry
     settings: SettingsService
     stats: StatsCache
+    sparklines: SparklineCache
     worker: Worker | None = None
     scheduler: UpdateScheduler | None = None

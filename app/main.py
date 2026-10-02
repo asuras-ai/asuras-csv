@@ -18,6 +18,7 @@ from app.scheduler import UpdateScheduler
 from app.services import jobs
 from app.services.assets import StatsCache
 from app.services.settings import SettingsService
+from app.services.sparklines import SparklineCache
 from app.state import Services
 from app.web.routes import router
 from app.web.security import CrossSiteGuard
@@ -62,7 +63,9 @@ def create_app(
     if registry is None:
         http = httpx.AsyncClient(headers={"User-Agent": "asuras-csv/0.1"}, follow_redirects=True)
         registry = build_registry(http, clock, settings, env)
-    services = Services(env=env, sf=sf, clock=clock, registry=registry, settings=settings, stats=StatsCache(clock))
+    services = Services(
+        env=env, sf=sf, clock=clock, registry=registry, settings=settings, stats=StatsCache(clock), sparklines=SparklineCache(clock)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
