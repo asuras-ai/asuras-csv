@@ -85,7 +85,7 @@ async def test_chart_page(client, sf):
     for label in ("1D", "1W", "1M", "6M", "1Y", "All"):
         assert f'data-range="{label}"' in page.text
     assert (await client.get("/assets/999/chart")).status_code == 404
-    assert f'/assets/{asset.id}/chart' in (await client.get("/")).text
+    assert f'href="/assets/{asset.id}"' in (await client.get("/assets")).text
 
 
 async def test_one_day_window_has_exactly_1440_full_bars(client, sf):

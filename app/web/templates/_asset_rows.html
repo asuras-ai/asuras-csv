@@ -1,23 +1,30 @@
 {% from "_macros.html" import status_pill %}
 {% for row in rows %}
-<tr>
-  <td><input type="checkbox" id="sel-{{ row.asset.id }}" name="ids" value="{{ row.asset.id }}" form="zip-form" hx-preserve aria-label="Select {{ row.asset.jesse_symbol }}"></td>
-  <td>{{ row.asset.jesse_symbol }}{% if not row.asset.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
-  <td>{{ row.provider_label }}<br><span class="muted">{{ row.asset.provider_symbol }}</span></td>
-  <td>{{ row.asset.asset_class }}</td>
+{% set a = row.asset %}
+{% set group = "active" if row.job and row.job.status in ACTIVE_STATUSES else ("failed" if row.job and row.job.status == "failed" else "idle") %}
+<tr data-href="/assets/{{ a.id }}" data-symbol="{{ (a.jesse_symbol ~ ' ' ~ a.provider_symbol)|lower }}" data-provider="{{ a.provider }}" data-status="{{ group }}">
+  <td><input type="checkbox" id="sel-{{ a.id }}" name="ids" value="{{ a.id }}" form="zip-form" hx-preserve aria-label="Select {{ a.jesse_symbol }}"></td>
+  <td><a class="sym" href="/assets/{{ a.id }}">{{ a.jesse_symbol }}</a>{% if not a.enabled %} <span class="badge">disabled</span>{% endif %}<span class="sub">{{ a.provider_symbol }}</span></td>
+  <td>{{ row.provider_label|short_label }}</td>
+  <td>{{ a.asset_class }}</td>
   <td>{{ row.stats.first|dt }}</td>
   <td>{{ row.stats.last|dt }}</td>
-  <td>{{ "{:,}".format(row.stats.count) }}</td>
-  <td>{{ row.asset.fetched_until|dt }}</td>
-  <td>{{ status_pill(row.job, row.progress) }}</td>
-  <td class="actions">
-    <form method="post" action="/assets/{{ row.asset.id }}/update"><button>Update</button></form>
-    <a href="/assets/{{ row.asset.id }}/export" role="button" class="secondary">Export</a>
-    <a href="/assets/{{ row.asset.id }}/chart" role="button" class="secondary">Chart</a>
-    <a href="/assets/{{ row.asset.id }}/edit" role="button" class="secondary outline">Edit</a>
-    <a href="/assets/{{ row.asset.id }}/delete" role="button" class="contrast outline">Delete</a>
+  <td class="num">{{ row.stats.count|num }}</td>
+  <td class="wrap">{{ status_pill(row.job, row.progress) }}</td>
+  <td class="num">
+    <details class="menu" id="menu-{{ a.id }}" hx-preserve>
+      <summary class="btn btn-sm btn-icon btn-ghost" aria-label="Actions for {{ a.jesse_symbol }}">{{ icon("ellipsis") }}</summary>
+      <div class="menu-list">
+        <form method="post" action="/assets/{{ a.id }}/update"><input type="hidden" name="next" value="/assets"><button>{{ icon("refresh-cw") }}Update now</button></form>
+        <a href="/assets/{{ a.id }}">{{ icon("chart-candlestick") }}Open detail</a>
+        <a href="/assets/{{ a.id }}#export">{{ icon("download") }}Export CSV</a>
+        <a href="/assets/{{ a.id }}#settings">{{ icon("pencil") }}Edit</a>
+        <hr>
+        <a class="danger" href="/assets/{{ a.id }}/delete">{{ icon("trash-2") }}Delete…</a>
+      </div>
+    </details>
   </td>
 </tr>
 {% else %}
-<tr><td colspan="10">No assets yet. <a href="/assets/new">Add one</a>.</td></tr>
+<tr class="table-empty"><td colspan="9">No assets yet.</td></tr>
 {% endfor %}

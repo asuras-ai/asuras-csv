@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from typing import Annotated
@@ -12,14 +11,15 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.domain import ProviderError
-from app.models import ACTIVE_STATUSES, Asset, Job
+from app.models import ACTIVE_STATUSES, Asset
 from app.services import assets as asset_service
 from app.services import jobs
-from app.services.assets import EMPTY_STATS, AssetStats
+from app.services.assets import EMPTY_STATS
 from app.services.export import day_bounds, export_filename, export_range, stream_csv
 from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
 from app.services.zip_export import build_zip, iter_and_close
-from app.services.progress import JobProgress, estimate_text, job_progress
+from app.services.progress import estimate_text
+from app.web.rows import job_rows, load_asset_rows
 from app.web.ui import redirect, safe_next, templates
 
 log = logging.getLogger(__name__)
@@ -42,38 +42,18 @@ def _start_of(day: date) -> datetime:
     return datetime.combine(day, time(), UTC)
 
 
-@dataclass(frozen=True)
-class AssetRow:
-    asset: Asset
-    provider_label: str
-    stats: AssetStats
-    job: Job | None
-    progress: JobProgress | None
-
-
-async def _asset_rows(svc) -> list[AssetRow]:
-    all_assets = await asset_service.list_assets(svc.sf)
-    stats = await svc.stats.get(svc.sf)
-    latest = await jobs.latest_jobs_by_asset(svc.sf)
-    rows = []
-    for asset in all_assets:
-        provider = svc.registry.find(asset.provider)
-        job = latest.get(asset.id)
-        progress = job_progress(job, asset.fetched_until, provider) if job and provider else None
-        label = provider.label if provider else asset.provider
-        rows.append(AssetRow(asset, label, stats.get(asset.id, EMPTY_STATS), job, progress))
-    return rows
-
-
 async def _rows_context(svc) -> dict:
-    rows = await _asset_rows(svc)
+    rows = await load_asset_rows(svc)
     active = any(row.job is not None and row.job.status in ACTIVE_STATUSES for row in rows)
     return {"rows": rows, "active": active}
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)  # moves to the Overview in Task 5
+@router.get("/assets", response_class=HTMLResponse)
 async def assets_page(request: Request):
-    return templates.TemplateResponse(request, "assets.html", await _rows_context(services(request)))
+    svc = services(request)
+    context = await _rows_context(svc) | {"providers": svc.registry.all()}
+    return templates.TemplateResponse(request, "assets.html", context)
 
 
 @router.get("/assets/rows", response_class=HTMLResponse)
@@ -308,21 +288,10 @@ async def export_zip(request: Request, ids: Annotated[list[int] | None, Query()]
     )
 
 
-@dataclass(frozen=True)
-class JobRow:
-    job: Job
-    asset: Asset
-    progress: JobProgress | None
-
-
 @router.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(request: Request):
     svc = services(request)
-    rows = []
-    for job, asset in await jobs.list_recent(svc.sf):
-        provider = svc.registry.find(asset.provider)
-        progress = job_progress(job, asset.fetched_until, provider) if provider else None
-        rows.append(JobRow(job, asset, progress))
+    rows = job_rows(svc, await jobs.list_recent(svc.sf))
     return templates.TemplateResponse(request, "jobs.html", {"rows": rows, "active_statuses": ACTIVE_STATUSES})
 
 

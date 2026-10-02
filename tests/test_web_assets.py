@@ -18,9 +18,9 @@ FORM = {
 
 
 async def test_empty_assets_page(client):
-    r = await client.get("/")
+    r = await client.get("/assets")
     assert r.status_code == 200
-    assert "No assets yet" in r.text
+    assert "No assets yet" in r.text and "Add your first asset" in r.text
 
 
 async def test_search_details_and_estimate(client):
@@ -146,9 +146,9 @@ async def test_rows_poll_every_2s_only_while_a_job_is_active(client, sf, clock):
 async def test_assets_page_tbody_polls_with_the_same_rule(client, sf, clock):
     registry = ProviderRegistry([FakeProvider(clock)])
     asset = await make_asset(sf)
-    assert 'hx-trigger="every 30s"' in (await client.get("/")).text
+    assert 'hx-trigger="every 30s"' in (await client.get("/assets")).text
     await jobs.enqueue(sf, registry, clock, asset.id, "backfill")
-    page = (await client.get("/")).text
+    page = (await client.get("/assets")).text
     assert 'hx-trigger="every 2s"' in page and 'hx-get="/assets/rows"' in page
 
 
@@ -172,3 +172,14 @@ async def test_update_all_survives_a_provider_error(client, sf, monkeypatch):
 async def test_update_all_skips_unknown_provider_assets(client, sf):
     await make_asset(sf, provider="gone", provider_symbol="OLD", jesse_symbol="OLD-USD")
     assert (await client.post("/assets/update-all")).status_code == 303
+
+
+async def test_assets_page_has_filters_bulk_bar_and_row_menu(client, sf):
+    asset = await make_asset(sf)
+    page = (await client.get("/assets")).text
+    assert "data-filters" in page and 'id="zip-form"' in page and 'id="select-all"' in page and 'id="bulk-count"' in page
+    assert f'data-href="/assets/{asset.id}"' in page and 'data-symbol="fake-usd fakeusd"' in page
+    assert 'data-provider="fake"' in page and 'data-status="idle"' in page
+    assert f'<details class="menu" id="menu-{asset.id}" hx-preserve>' in page
+    assert f'action="/assets/{asset.id}/update"' in page and f'href="/assets/{asset.id}/delete"' in page
+    assert 'href="/assets" aria-current="page"' in page
