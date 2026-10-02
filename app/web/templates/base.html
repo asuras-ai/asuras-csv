@@ -3,31 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}OHLCV Downloader{% endblock %}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-  <style>
-    table td, table th { white-space: nowrap; font-size: .9rem; vertical-align: top; }
-    .error { color: var(--pico-del-color); }
-    .muted { color: var(--pico-muted-color); font-size: .85rem; }
-    .actions form { display: inline; }
-    .actions button, .actions a[role=button] { padding: .2rem .5rem; font-size: .8rem; margin: 0 .1rem 0 0; }
-    .toolbar { display: flex; gap: .5rem; margin-bottom: 1rem; }
-    .toolbar form { margin: 0; }
-    progress { margin: 0; width: 8rem; }
-  </style>
+  <title>{% if page_title %}{{ page_title }} · {% endif %}Asuras CSV</title>
+  <script>try { var t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css?v={{ static_version }}">
+  <script src="/static/vendor/htmx-2.0.4.min.js"></script>
+  <script src="/static/app.js?v={{ static_version }}" defer></script>
 </head>
 <body>
-<main class="container-fluid">
-  <nav>
-    <ul><li><strong>OHLCV Downloader</strong></li></ul>
-    <ul>
-      <li><a href="/">Assets</a></li>
-      <li><a href="/jobs">Jobs</a></li>
-      <li><a href="/settings">Settings</a></li>
-    </ul>
-  </nav>
-  {% block content %}{% endblock %}
-</main>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/"><span class="brand-mark"></span>Asuras CSV</a>
+    <nav class="nav" aria-label="Main">
+      {% for key, href, icon_name, label in [("overview", "/", "layout-dashboard", "Overview"), ("assets", "/assets", "database", "Assets"), ("jobs", "/jobs", "activity", "Jobs"), ("settings", "/settings", "settings", "Settings")] %}
+      <a class="nav-item{% if active_nav == key %} active{% endif %}" href="{{ href }}"{% if active_nav == key %} aria-current="page"{% endif %}>{{ icon(icon_name) }}<span>{{ label }}</span>{% if key == "jobs" %}<span id="nav-jobs-count" class="nav-count" hidden></span>{% endif %}</a>
+      {% endfor %}
+    </nav>
+    <div class="sidebar-foot">
+      <div id="nav-status" class="sidebar-status" hx-get="/nav/status" hx-trigger="load" hx-swap="outerHTML"></div>
+      <button type="button" class="btn btn-ghost btn-sm" data-theme-toggle>{{ icon("sun-moon") }}Toggle theme</button>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button type="button" class="btn btn-ghost btn-icon" data-sidebar-toggle aria-label="Open menu">{{ icon("menu") }}</button>
+      <a class="brand" href="/"><span class="brand-mark"></span>Asuras CSV</a>
+    </header>
+    <div class="page-header">
+      <div class="page-title">{% block crumb %}{% endblock %}<h1>{% block heading %}{{ page_title }}{% endblock %}</h1>{% block heading_extra %}{% endblock %}</div>
+      <span id="reconnecting" class="badge badge-warning" hidden>Reconnecting…</span>
+      <div class="page-actions">{% block actions %}{% endblock %}</div>
+    </div>
+    <main class="page-body">{% block content %}{% endblock %}</main>
+  </div>
+</div>
+<div class="sidebar-backdrop" data-sidebar-toggle></div>
+<div class="toast-region" aria-live="polite">{% if flash %}<div class="toast" role="status">{{ icon("check") }}<span>{{ flash }}</span><button type="button" class="toast-close" aria-label="Dismiss">{{ icon("x") }}</button></div>{% endif %}</div>
+{% block scripts %}{% endblock %}
 </body>
 </html>

@@ -186,6 +186,12 @@ async def latest_jobs_by_asset(sf: SessionFactory) -> dict[int, Job]:
         return {job.asset_id: job for job in rows}
 
 
+async def status_counts(sf: SessionFactory) -> dict[str, int]:
+    async with sf() as s:
+        rows = await s.execute(select(Job.status, func.count()).group_by(Job.status))
+        return {status: count for status, count in rows}
+
+
 async def list_recent(sf: SessionFactory, limit: int = 200) -> list[tuple[Job, Asset]]:
     async with sf() as s:
         result = await s.execute(

@@ -47,6 +47,12 @@ class ProviderRegistry:
         return list(self._providers.values())
 
 
+def split_label(label: str) -> tuple[str, str]:
+    """'Binance (crypto)' -> ('Binance', 'crypto'); a label without parentheses has no coverage part."""
+    name, _, coverage = label.partition(" (")
+    return name, coverage.rstrip(")")
+
+
 def _normalise(value: str) -> str:
     return value.upper().replace("-", "").replace("/", "").replace("_", "").strip()
 

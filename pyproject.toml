@@ -33,7 +33,14 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["web/templates/*.html"]
+app = [
+  "web/templates/*.html",
+  "web/static/*.css",
+  "web/static/*.js",
+  "web/static/*.svg",
+  "web/static/vendor/*",
+  "web/static/vendor/inter/*",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

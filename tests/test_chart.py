@@ -81,7 +81,7 @@ async def test_chart_json_errors_and_empty(client, sf):
 async def test_chart_page(client, sf):
     asset = await make_asset(sf)
     page = await client.get(f"/assets/{asset.id}/chart")
-    assert page.status_code == 200 and "lightweight-charts@4.2.0" in page.text and f"/assets/{asset.id}/candles.json" in page.text
+    assert page.status_code == 200 and "/static/vendor/lightweight-charts-4.2.0.standalone.production.js" in page.text and f"/assets/{asset.id}/candles.json" in page.text
     for label in ("1D", "1W", "1M", "6M", "1Y", "All"):
         assert f'data-range="{label}"' in page.text
     assert (await client.get("/assets/999/chart")).status_code == 404

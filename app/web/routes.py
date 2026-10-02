@@ -5,12 +5,10 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
 
 from app.domain import ProviderError
@@ -21,13 +19,11 @@ from app.services.assets import EMPTY_STATS, AssetStats
 from app.services.export import day_bounds, export_filename, export_range, stream_csv
 from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
 from app.services.zip_export import build_zip, iter_and_close
-from app.services.progress import JobProgress, estimate_text, format_duration, job_progress
+from app.services.progress import JobProgress, estimate_text, job_progress
+from app.web.ui import templates
 
 log = logging.getLogger(__name__)
 router = APIRouter()
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-templates.env.filters["dt"] = lambda value: value.strftime("%Y-%m-%d %H:%M") if value else "—"
-templates.env.filters["duration"] = format_duration
 
 
 def services(request: Request):
@@ -335,6 +331,19 @@ async def cancel_job(request: Request, job_id: int, next: Annotated[str, Form()]
     await jobs.cancel(svc.sf, svc.clock, job_id)
     same_origin = next.startswith("/") and not next.startswith(("//", "/\\"))
     return redirect(next if same_origin else "/jobs")
+
+
+@router.get("/nav/status", response_class=HTMLResponse)
+async def nav_status(request: Request):
+    svc = services(request)
+    counts = await jobs.status_counts(svc.sf)
+    current = await svc.settings.load()
+    context = {
+        "active_jobs": sum(counts.get(status, 0) for status in ACTIVE_STATUSES),
+        "schedule_enabled": current.schedule_enabled,
+        "next_run": svc.scheduler.next_run() if svc.scheduler else None,
+    }
+    return templates.TemplateResponse(request, "_nav_status.html", context)
 
 
 CRON_PRESETS = [
