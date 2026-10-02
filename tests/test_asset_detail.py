@@ -53,10 +53,10 @@ async def test_live_fragment_updates_status_details_and_jobs(client, sf, clock):
     asset = await make_asset(sf)
     idle = (await client.get(f"/assets/{asset.id}/live")).text
     assert idle.lstrip().startswith('<span id="asset-status"') and 'hx-trigger="every 30s"' in idle
-    assert idle.count('hx-swap-oob="true"') == 2 and "No jobs yet." in idle
+    assert idle.count('hx-swap-oob="true"') == 3 and "No jobs yet." in idle  # details, jobs, export
     await jobs.enqueue(sf, ProviderRegistry([FakeProvider(clock)]), clock, asset.id, "backfill")
     busy = (await client.get(f"/assets/{asset.id}/live")).text
-    assert 'hx-trigger="every 2s"' in busy and "backfill" in busy
+    assert 'hx-trigger="every 2s"' in busy and "backfill" in busy and busy.count('hx-swap-oob="true"') == 2
 
 
 async def test_edit_saves_and_errors_render_on_the_detail_page(client, sf):
@@ -71,3 +71,21 @@ async def test_detail_page_for_an_asset_with_an_unknown_provider(client, sf):
     stale = await make_asset(sf, provider="gone", provider_symbol="OLD", jesse_symbol="OLD-USD")
     r = await client.get(f"/assets/{stale.id}")
     assert r.status_code == 200 and "gone · OLD" in r.text
+
+
+async def test_live_fragment_refreshes_the_export_card_once_no_job_is_active(client, sf, clock):
+    asset = await make_asset(sf)
+    job = await jobs.enqueue(sf, ProviderRegistry([FakeProvider(clock)]), clock, asset.id, "backfill")
+    busy = (await client.get(f"/assets/{asset.id}/live")).text
+    assert 'id="export"' not in busy and 'data-active="true"' in busy  # no export query every 2 s
+    async with sf.begin() as s:
+        await insert_candles(s, asset.id, [Candle(T0, 1, 2, 0.5, 1.5, 10)])
+    await jobs.cancel(sf, clock, job.id)
+    idle = (await client.get(f"/assets/{asset.id}/live")).text
+    assert 'id="export" hx-swap-oob="true"' in idle and 'value="2024-01-01"' in idle and 'data-active="false"' in idle
+
+
+async def test_detail_chart_reloads_when_the_job_finishes(client, sf):
+    asset = await make_asset(sf)
+    page = (await client.get(f"/assets/{asset.id}")).text
+    assert 'id="export"' in page and "htmx:afterSwap" in page and "wasActive" in page

@@ -2,7 +2,7 @@
 {% from "_macros.html" import status_pill %}
 
 {% macro status_region(asset, row, active) -%}
-<span id="asset-status" class="status-region" hx-get="/assets/{{ asset.id }}/live" hx-trigger="every {{ '2s' if active else '30s' }}" hx-swap="outerHTML">{{ status_pill(row.job, row.progress) }}</span>
+<span id="asset-status" class="status-region" data-active="{{ 'true' if active else 'false' }}" hx-get="/assets/{{ asset.id }}/live" hx-trigger="every {{ '2s' if active else '30s' }}" hx-swap="outerHTML">{{ status_pill(row.job, row.progress) }}</span>
 {%- endmacro %}
 
 {% macro details_card(asset, row, oob=False) -%}
@@ -16,6 +16,23 @@
     <dt>Fetched until</dt><dd>{{ asset.fetched_until|dt }}</dd>
     <dt>Jesse</dt><dd>Custom Data · {{ asset.jesse_symbol }}</dd>
   </dl>
+</div>
+{%- endmacro %}
+
+{% macro export_card(asset, rng, oob=False) -%}
+<div class="card" id="export"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="card-header"><h2>Export CSV</h2></div>
+  {% if rng is none %}
+  <div class="card-body muted">No candles stored yet.</div>
+  {% else %}
+  <form class="card-body stack-sm" method="get" action="/assets/{{ asset.id }}/export.csv">
+    <div class="form-grid">
+      <div class="field"><label for="exp-start">From</label><input class="input" id="exp-start" type="date" name="start" value="{{ rng.first.date().isoformat() }}"></div>
+      <div class="field"><label for="exp-end">To (inclusive)</label><input class="input" id="exp-end" type="date" name="end" value="{{ rng.last.date().isoformat() }}"></div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary btn-sm">{{ icon("download") }}Download CSV</button></div>
+  </form>
+  {% endif %}
 </div>
 {%- endmacro %}
 

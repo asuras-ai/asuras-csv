@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import alert %}
-{% from "_asset_parts.html" import status_region, details_card, jobs_card %}
+{% from "_asset_parts.html" import status_region, details_card, export_card, jobs_card %}
 {% set page_title = asset.jesse_symbol %}{% set active_nav = "assets" %}
 {% block crumb %}<a class="crumb" href="/assets">Assets /</a>{% endblock %}
 {% block heading_extra %}{{ status_region(asset, row, active) }}{% endblock %}
@@ -19,20 +19,7 @@
   </div>
   <div class="stack">
     {{ details_card(asset, row) }}
-    <div class="card" id="export">
-      <div class="card-header"><h2>Export CSV</h2></div>
-      {% if rng is none %}
-      <div class="card-body muted">No candles stored yet.</div>
-      {% else %}
-      <form class="card-body stack-sm" method="get" action="/assets/{{ asset.id }}/export.csv">
-        <div class="form-grid">
-          <div class="field"><label for="exp-start">From</label><input class="input" id="exp-start" type="date" name="start" value="{{ rng.first.date().isoformat() }}"></div>
-          <div class="field"><label for="exp-end">To (inclusive)</label><input class="input" id="exp-end" type="date" name="end" value="{{ rng.last.date().isoformat() }}"></div>
-        </div>
-        <div class="form-actions"><button class="btn btn-primary btn-sm">{{ icon("download") }}Download CSV</button></div>
-      </form>
-      {% endif %}
-    </div>
+    {{ export_card(asset, rng) }}
   </div>
 </div>
 <div class="detail-grid">
@@ -108,6 +95,14 @@
     if (!b) return;
     document.querySelectorAll("#ranges button").forEach(function (x) { x.classList.toggle("active", x === b); });
     load(b.dataset.range);
+  });
+  // When the download finishes, redraw with the new candles (the live poll refreshes the other cards).
+  var wasActive = {{ 'true' if active else 'false' }};
+  document.addEventListener("htmx:afterSwap", function (ev) {
+    if (ev.target.id !== "asset-status") return;
+    var active = ev.target.dataset.active === "true";
+    if (wasActive && !active) load(document.querySelector("#ranges button.active").dataset.range);
+    wasActive = active;
   });
   load("{{ default_range }}");
 })();

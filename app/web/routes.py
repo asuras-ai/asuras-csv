@@ -187,13 +187,17 @@ async def _live_context(svc, asset: Asset) -> dict:
     row = await load_asset_row(svc, asset)
     history = job_rows(svc, await jobs.list_recent(svc.sf, limit=10, asset_id=asset.id))
     active = row.job is not None and row.job.status in ACTIVE_STATUSES
-    return {"asset": asset, "row": row, "history": history, "active": active}
+    # The export range is a scan over the asset's candles, so it is refreshed only once no job is writing them.
+    rng = None if active else await export_range(svc.sf, asset.id, None, None)
+    return {"asset": asset, "row": row, "history": history, "active": active, "rng": rng}
 
 
 async def _detail_page(request: Request, asset: Asset, error: str | None = None, form_symbol: str | None = None, status_code: int = 200):
     svc = services(request)
-    context = await _live_context(svc, asset) | {
-        "rng": await export_range(svc.sf, asset.id, None, None),
+    context = await _live_context(svc, asset)
+    if context["active"]:
+        context["rng"] = await export_range(svc.sf, asset.id, None, None)
+    context |= {
         "ranges": list(RANGES),
         "default_range": DEFAULT_RANGE,
         "error": error,
