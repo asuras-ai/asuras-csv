@@ -48,7 +48,6 @@ async def _rows_context(svc) -> dict:
     return {"rows": rows, "active": active}
 
 
-@router.get("/", response_class=HTMLResponse)  # moves to the Overview in Task 5
 @router.get("/assets", response_class=HTMLResponse)
 async def assets_page(request: Request):
     svc = services(request)

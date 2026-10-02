@@ -20,6 +20,7 @@ from app.services.assets import StatsCache
 from app.services.settings import SettingsService
 from app.services.sparklines import SparklineCache
 from app.state import Services
+from app.web import overview
 from app.web.routes import router
 from app.web.security import CrossSiteGuard
 from app.web.ui import STATIC_DIR, FlashCleaner
@@ -99,6 +100,7 @@ def create_app(
     app.state.services = services
     app.add_middleware(CrossSiteGuard)
     app.add_middleware(FlashCleaner)
+    app.include_router(overview.router)
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
