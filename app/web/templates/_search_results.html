@@ -1,11 +1,13 @@
-{% if error %}<p class="error">{{ error }}</p>
+{% from "_macros.html" import alert %}
+{% if error %}{{ alert(error) }}
 {% elif symbols %}
-<ul>
+<ul class="result-list">
   {% for s in symbols %}
   <li>
     <a href="#" hx-get="/assets/new/details" hx-target="#details"
-       hx-vals='{{ {"provider": provider, "symbol": s.provider_symbol, "asset_class": s.asset_class, "jesse_symbol": s.suggested_jesse_symbol}|tojson }}'>{{ s.provider_symbol }}</a>
-    <span class="muted">{{ s.name }} · {{ s.asset_class }}</span>
+       hx-vals='{{ {"provider": provider, "symbol": s.provider_symbol, "asset_class": s.asset_class, "jesse_symbol": s.suggested_jesse_symbol}|tojson }}'>
+      <span class="sym">{{ s.provider_symbol }}</span><span class="muted">{{ s.name }} · {{ s.asset_class }}</span>
+    </a>
   </li>
   {% endfor %}
 </ul>

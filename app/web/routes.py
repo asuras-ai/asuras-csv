@@ -19,6 +19,7 @@ from app.services.export import day_bounds, export_filename, export_range, strea
 from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
 from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import estimate_text
+from app.services.sources import source_statuses
 from app.web.rows import job_rows, load_asset_row, load_asset_rows
 from app.web.ui import redirect, safe_next, templates
 
@@ -60,14 +61,15 @@ async def asset_rows(request: Request):
     return templates.TemplateResponse(request, "_asset_tbody.html", await _rows_context(services(request)))
 
 
-def _new_page(request: Request, error: str | None = None, status_code: int = 200):
-    context = {"providers": services(request).registry.all(), "error": error}
+async def _new_page(request: Request, error: str | None = None, status_code: int = 200):
+    svc = services(request)
+    context = {"sources": source_statuses(svc.registry, await svc.settings.load()), "error": error}
     return templates.TemplateResponse(request, "asset_new.html", context, status_code=status_code)
 
 
 @router.get("/assets/new", response_class=HTMLResponse)
 async def new_asset(request: Request):
-    return _new_page(request)
+    return await _new_page(request)
 
 
 @router.get("/assets/search", response_class=HTMLResponse)
@@ -110,7 +112,7 @@ async def estimate(request: Request, provider: str, start_date: str = ""):
         p = svc.registry.get(provider)
         return HTMLResponse(estimate_text(p, _start_of(start), p.available_until(svc.clock.now())))
     except ProviderError as exc:
-        return HTMLResponse(f'<span class="error">{escape(str(exc))}</span>')
+        return HTMLResponse(f'<span class="field-error">{escape(str(exc))}</span>')
 
 
 @router.post("/assets")
@@ -125,15 +127,15 @@ async def create(
     svc = services(request)
     p = svc.registry.find(provider)
     if p is None or asset_class not in p.asset_classes:
-        return _new_page(request, "Unknown provider or asset class.", 400)
+        return await _new_page(request, "Unknown provider or asset class.", 400)
     if start_date > svc.clock.now().date():
-        return _new_page(request, "Start date cannot be in the future.", 400)
+        return await _new_page(request, "Start date cannot be in the future.", 400)
     try:
         earliest = (await p.earliest_available(provider_symbol)).date()
     except ProviderError as exc:
-        return _new_page(request, str(exc), 400)
+        return await _new_page(request, str(exc), 400)
     if start_date < earliest:
-        return _new_page(request, f"Start date is before the earliest available data ({earliest.isoformat()}).", 400)
+        return await _new_page(request, f"Start date is before the earliest available data ({earliest.isoformat()}).", 400)
     try:
         asset = await asset_service.create_asset(
             svc.sf,
@@ -144,7 +146,7 @@ async def create(
             start_date=start_date,
         )
     except ValueError as exc:
-        return _new_page(request, str(exc), 400)
+        return await _new_page(request, str(exc), 400)
     await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset.id, "backfill")
     svc.stats.invalidate()
     return redirect(f"/assets/{asset.id}", notice=f"{asset.jesse_symbol} added, download queued")

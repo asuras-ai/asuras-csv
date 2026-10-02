@@ -1,19 +1,38 @@
 {% extends "base.html" %}
+{% from "_macros.html" import alert %}
+{% set page_title = "Add asset" %}{% set active_nav = "assets" %}
+{% block crumb %}<a class="crumb" href="/assets">Assets /</a>{% endblock %}
 {% block content %}
-<h2>Add asset</h2>
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-<form method="post" action="/assets">
-  <label>Provider
-    <select name="search_provider" hx-get="/assets/search" hx-target="#results" hx-include="[name=q]" hx-trigger="change">
-      {% for p in providers %}<option value="{{ p.name }}">{{ p.label }}</option>{% endfor %}
-    </select>
-  </label>
-  <label>Search symbol
-    <input type="search" name="q" placeholder="e.g. BTCUSDT, AAPL, EURUSD" autocomplete="off" hx-on:keydown="if(event.key==='Enter'){event.preventDefault()}"
-           hx-get="/assets/search" hx-trigger="input changed delay:300ms, search"
-           hx-target="#results" hx-include="[name=search_provider]">
-  </label>
-  <div id="results"></div>
-  <div id="details"></div>
+<form class="stack page-narrow" method="post" action="/assets">
+  {{ alert(error) }}
+  <section class="card">
+    <div class="card-header"><span class="step-num">1</span><div><h2>Choose a data source</h2><p>Where the candles come from.</p></div></div>
+    <div class="card-body">
+      <div class="source-grid" hx-get="/assets/search" hx-trigger="change" hx-target="#results" hx-include="[name=q], [name=search_provider]:checked">
+        {% for s in sources %}
+        <label class="source-option">
+          <input type="radio" name="search_provider" value="{{ s.name }}"{% if loop.first %} checked{% endif %}>
+          <span class="source-name">{{ s.label }}</span>
+          {% if s.coverage %}<span class="source-meta">{{ s.coverage }}</span>{% endif %}
+          <span class="source-meta">{% if not s.needs_key %}No key needed{% elif s.ready %}{{ icon("check") }} Key configured{% else %}<a class="link" href="/settings">Key missing → Settings</a>{% endif %}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-header"><span class="step-num">2</span><div><h2>Find the symbol</h2><p>Search the selected source.</p></div></div>
+    <div class="card-body">
+      <input class="input" type="search" name="q" placeholder="e.g. BTCUSDT, AAPL, EURUSD" autocomplete="off" aria-label="Search symbol"
+             hx-on:keydown="if(event.key==='Enter'){event.preventDefault()}"
+             hx-get="/assets/search" hx-trigger="input changed delay:300ms, search"
+             hx-target="#results" hx-include="[name=search_provider]:checked">
+      <div id="results"></div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-header"><span class="step-num">3</span><div><h2>Configure</h2><p>Name it for Jesse and pick how far back to download.</p></div></div>
+    <div class="card-body" id="details"><p class="muted">Pick a symbol above to configure the download.</p></div>
+  </section>
 </form>
 {% endblock %}
