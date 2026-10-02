@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import job_status %}
+{% from "_macros.html" import status_pill %}
 {% block content %}
 <h2>Jobs</h2>
 <div class="overflow-auto">
@@ -16,7 +16,7 @@
       <td>{{ row.job.id }}</td>
       <td>{{ row.asset.jesse_symbol }}</td>
       <td>{{ row.job.kind }}</td>
-      <td>{{ job_status(row.job, row.progress) }}</td>
+      <td>{{ status_pill(row.job, row.progress) }}</td>
       <td>{{ row.job.range_start|dt }} → {{ row.job.range_end|dt }}</td>
       <td>{{ "{:,}".format(row.job.requests_made) }}</td>
       <td>{{ "{:,}".format(row.job.candles_added) }}</td>

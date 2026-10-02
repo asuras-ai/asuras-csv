@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% from "_macros.html" import alert %}
+{% set page_title = "Something went wrong" %}
+{% block content %}
+<div class="card confirm">
+  <div class="card-body stack-sm">
+    {{ alert(message) }}
+    <div class="form-actions"><a class="btn" href="/assets">{{ icon("arrow-left") }}Back to assets</a></div>
+  </div>
+</div>
+{% endblock %}

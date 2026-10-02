@@ -1,4 +1,4 @@
-{% from "_macros.html" import job_status %}
+{% from "_macros.html" import status_pill %}
 {% for row in rows %}
 <tr>
   <td><input type="checkbox" id="sel-{{ row.asset.id }}" name="ids" value="{{ row.asset.id }}" form="zip-form" hx-preserve aria-label="Select {{ row.asset.jesse_symbol }}"></td>
@@ -9,7 +9,7 @@
   <td>{{ row.stats.last|dt }}</td>
   <td>{{ "{:,}".format(row.stats.count) }}</td>
   <td>{{ row.asset.fetched_until|dt }}</td>
-  <td>{{ job_status(row.job, row.progress) }}</td>
+  <td>{{ status_pill(row.job, row.progress) }}</td>
   <td class="actions">
     <form method="post" action="/assets/{{ row.asset.id }}/update"><button>Update</button></form>
     <a href="/assets/{{ row.asset.id }}/export" role="button" class="secondary">Export</a>

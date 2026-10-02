@@ -21,7 +21,7 @@ from app.services.settings import SettingsService
 from app.state import Services
 from app.web.routes import router
 from app.web.security import CrossSiteGuard
-from app.web.ui import STATIC_DIR
+from app.web.ui import STATIC_DIR, FlashCleaner
 from app.worker import Worker
 
 log = logging.getLogger(__name__)
@@ -95,6 +95,7 @@ def create_app(
     app = FastAPI(title="Asuras CSV", lifespan=lifespan)
     app.state.services = services
     app.add_middleware(CrossSiteGuard)
+    app.add_middleware(FlashCleaner)
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

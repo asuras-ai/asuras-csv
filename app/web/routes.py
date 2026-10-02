@@ -8,7 +8,7 @@ from html import escape
 from typing import Annotated
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.domain import ProviderError
@@ -20,7 +20,7 @@ from app.services.export import day_bounds, export_filename, export_range, strea
 from app.services.charts import DEFAULT_RANGE, RANGES, candles_for_chart, interval_label
 from app.services.zip_export import build_zip, iter_and_close
 from app.services.progress import JobProgress, estimate_text, job_progress
-from app.web.ui import templates
+from app.web.ui import redirect, safe_next, templates
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,13 +30,12 @@ def services(request: Request):
     return request.app.state.services
 
 
-def message_page(message: str, status_code: int) -> HTMLResponse:
-    html = f'<p class="error">{escape(message)}</p><p><a href="/">Back to assets</a></p>'
-    return HTMLResponse(html, status_code=status_code)
+def message_page(request: Request, message: str, status_code: int) -> HTMLResponse:
+    return templates.TemplateResponse(request, "message.html", {"message": message}, status_code=status_code)
 
 
-def redirect(url: str) -> RedirectResponse:
-    return RedirectResponse(url, status_code=303)
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
 def _start_of(day: date) -> datetime:
@@ -169,29 +168,31 @@ async def create(
         return _new_page(request, str(exc), 400)
     await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset.id, "backfill")
     svc.stats.invalidate()
-    return redirect("/")
+    return redirect("/assets", notice=f"{asset.jesse_symbol} added, download queued")
 
 
 @router.post("/assets/update-all")
-async def update_all(request: Request):
+async def update_all(request: Request, next: Annotated[str, Form()] = "/"):
     svc = services(request)
     try:
-        await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
-    except ProviderError:
+        created = await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
+    except ProviderError as exc:
         log.warning("update-all failed", exc_info=True)
-    return redirect("/")
+        return redirect(safe_next(next, "/"), notice=f"Could not queue updates: {exc}")
+    return redirect(safe_next(next, "/"), notice=f"Update queued for {_plural(len(created), 'asset')}")
 
 
 @router.post("/assets/{asset_id}/update")
-async def update_one(request: Request, asset_id: int):
+async def update_one(request: Request, asset_id: int, next: Annotated[str, Form()] = "/assets"):
     svc = services(request)
-    if await asset_service.get_asset(svc.sf, asset_id) is None:
+    asset = await asset_service.get_asset(svc.sf, asset_id)
+    if asset is None:
         raise HTTPException(404, "Asset not found")
     try:
         await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
     except ProviderError as exc:
-        return message_page(f"Cannot update this asset: {exc}", 400)
-    return redirect("/")
+        return message_page(request, f"Cannot update this asset: {exc}", 400)
+    return redirect(safe_next(next, "/assets"), notice=f"Update queued for {asset.jesse_symbol}")
 
 
 async def _asset_or_404(svc, asset_id: int) -> Asset:
@@ -220,7 +221,7 @@ async def edit(
         await asset_service.update_asset(svc.sf, asset_id, jesse_symbol=jesse_symbol, enabled=enabled is not None)
     except ValueError as exc:
         return templates.TemplateResponse(request, "asset_edit.html", {"asset": asset, "error": str(exc)}, status_code=400)
-    return redirect("/")
+    return redirect("/assets", notice=f"Saved {jesse_symbol.strip()}")
 
 
 @router.get("/assets/{asset_id}/delete", response_class=HTMLResponse)
@@ -234,10 +235,10 @@ async def delete_page(request: Request, asset_id: int):
 @router.post("/assets/{asset_id}/delete")
 async def delete(request: Request, asset_id: int):
     svc = services(request)
-    await _asset_or_404(svc, asset_id)
+    asset = await _asset_or_404(svc, asset_id)
     await asset_service.delete_asset(svc.sf, asset_id)
     svc.stats.invalidate()
-    return redirect("/")
+    return redirect("/assets", notice=f"Deleted {asset.jesse_symbol}")
 
 
 @router.get("/assets/{asset_id}/export", response_class=HTMLResponse)
@@ -292,12 +293,12 @@ async def candles_json(request: Request, asset_id: int, range: Annotated[str, Qu
 async def export_zip(request: Request, ids: Annotated[list[int] | None, Query()] = None, start: str | None = None, end: str | None = None):
     svc = services(request)
     if not ids:
-        return message_page("Select at least one asset.", 400)
+        return message_page(request, "Select at least one asset.", 400)
     start_dt, end_dt = day_bounds(_parse_day(start), _parse_day(end))
     assets = [await _asset_or_404(svc, asset_id) for asset_id in dict.fromkeys(ids)]
     tmp = await build_zip(svc.sf, assets, start_dt, end_dt)
     if tmp is None:
-        return message_page("No candles in this range for the selected assets.", 404)
+        return message_page(request, "No candles in this range for the selected assets.", 404)
     filename = f"ohlcv-export-{datetime.now(UTC):%Y%m%d-%H%M%S}.zip"
     return StreamingResponse(
         iter_and_close(tmp),
@@ -329,8 +330,7 @@ async def jobs_page(request: Request):
 async def cancel_job(request: Request, job_id: int, next: Annotated[str, Form()] = "/jobs"):
     svc = services(request)
     await jobs.cancel(svc.sf, svc.clock, job_id)
-    same_origin = next.startswith("/") and not next.startswith(("//", "/\\"))
-    return redirect(next if same_origin else "/jobs")
+    return redirect(safe_next(next, "/jobs"), notice=f"Cancelled job #{job_id}")
 
 
 @router.get("/nav/status", response_class=HTMLResponse)
@@ -363,7 +363,6 @@ async def _settings_page(request: Request, error: str | None = None, status_code
     context = {
         "s": current,
         "error": error,
-        "saved": request.query_params.get("saved") == "1",
         "presets": CRON_PRESETS,
         "next_run": svc.scheduler.next_run() if svc.scheduler else None,
         "key_hint": _key_hint(current.alpaca_key_id),
@@ -410,4 +409,4 @@ async def save_settings(
         svc.worker.resize(updated.worker_concurrency)
     if svc.scheduler:
         svc.scheduler.apply(updated)
-    return redirect("/settings?saved=1")
+    return redirect("/settings", notice="Settings saved")
