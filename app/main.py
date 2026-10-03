@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.clock import Clock
 from app.config import EnvConfig
@@ -17,9 +18,12 @@ from app.scheduler import UpdateScheduler
 from app.services import jobs
 from app.services.assets import StatsCache
 from app.services.settings import SettingsService
+from app.services.sparklines import SparklineCache
 from app.state import Services
+from app.web import overview
 from app.web.routes import router
 from app.web.security import CrossSiteGuard
+from app.web.ui import STATIC_DIR, FlashCleaner
 from app.worker import Worker
 
 log = logging.getLogger(__name__)
@@ -60,7 +64,9 @@ def create_app(
     if registry is None:
         http = httpx.AsyncClient(headers={"User-Agent": "asuras-csv/0.1"}, follow_redirects=True)
         registry = build_registry(http, clock, settings, env)
-    services = Services(env=env, sf=sf, clock=clock, registry=registry, settings=settings, stats=StatsCache(clock))
+    services = Services(
+        env=env, sf=sf, clock=clock, registry=registry, settings=settings, stats=StatsCache(clock), sparklines=SparklineCache(clock)
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -73,7 +79,7 @@ def create_app(
                     log.info("re-queued %d interrupted jobs", recovered)
                 current = await settings.load()
                 services.worker = Worker(
-                    sf, registry, clock, current.worker_concurrency, on_progress=lambda: services.stats.refresh_soon(sf)
+                    sf, registry, clock, current.worker_concurrency, on_progress=lambda: (services.stats.refresh_soon(sf), services.sparklines.refresh_soon(sf))
                 )
                 services.worker.start()
                 services.scheduler = UpdateScheduler(sf, registry, clock)
@@ -90,8 +96,11 @@ def create_app(
             if engine is not None:
                 await engine.dispose()
 
-    app = FastAPI(title="OHLCV Downloader", lifespan=lifespan)
+    app = FastAPI(title="Asuras CSV", lifespan=lifespan)
     app.state.services = services
     app.add_middleware(CrossSiteGuard)
+    app.add_middleware(FlashCleaner)
+    app.include_router(overview.router)
     app.include_router(router)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

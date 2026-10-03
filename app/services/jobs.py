@@ -186,12 +186,32 @@ async def latest_jobs_by_asset(sf: SessionFactory) -> dict[int, Job]:
         return {job.asset_id: job for job in rows}
 
 
-async def list_recent(sf: SessionFactory, limit: int = 200) -> list[tuple[Job, Asset]]:
+async def status_counts(sf: SessionFactory) -> dict[str, int]:
     async with sf() as s:
-        result = await s.execute(
-            select(Job, Asset).join(Asset, Asset.id == Job.asset_id).order_by(Job.id.desc()).limit(limit)
-        )
-        return [(job, asset) for job, asset in result]
+        rows = await s.execute(select(Job.status, func.count()).group_by(Job.status))
+        return {status: count for status, count in rows}
+
+
+JOB_FILTERS = {"active": ACTIVE_STATUSES, "failed": ("failed",)}
+
+
+async def list_recent(
+    sf: SessionFactory, limit: int = 200, *, status: str | None = None, asset_id: int | None = None
+) -> list[tuple[Job, Asset]]:
+    stmt = select(Job, Asset).join(Asset, Asset.id == Job.asset_id).order_by(Job.id.desc()).limit(limit)
+    if status is not None:
+        stmt = stmt.where(Job.status.in_(JOB_FILTERS[status]))
+    if asset_id is not None:
+        stmt = stmt.where(Job.asset_id == asset_id)
+    async with sf() as s:
+        return [(job, asset) for job, asset in await s.execute(stmt)]
+
+
+async def last_done_by_asset(sf: SessionFactory) -> dict[int, datetime]:
+    """When each asset's most recent successful job finished."""
+    async with sf() as s:
+        rows = await s.execute(select(Job.asset_id, func.max(Job.finished_at)).where(Job.status == "done").group_by(Job.asset_id))
+        return {asset_id: finished for asset_id, finished in rows}
 
 
 async def prune(sf: SessionFactory, clock: Clock, keep_days: int = 30) -> int:

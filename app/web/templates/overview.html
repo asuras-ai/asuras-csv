@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% set page_title = "Overview" %}{% set active_nav = "overview" %}
+{% block actions %}
+<form class="inline" method="post" action="/assets/update-all"><input type="hidden" name="next" value="/"><button class="btn">{{ icon("refresh-cw") }}Update all</button></form>
+<a class="btn btn-primary" href="/assets/new">{{ icon("plus") }}Add asset</a>
+{% endblock %}
+{% block content %}{% include "_overview_live.html" %}{% endblock %}

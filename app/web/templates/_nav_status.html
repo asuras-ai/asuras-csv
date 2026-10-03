@@ -1,0 +1,6 @@
+{# Sidebar footer + Jobs badge (out-of-band). Polled every 10 s by itself. #}
+<div id="nav-status" class="sidebar-status" hx-get="/nav/status" hx-trigger="every 10s" hx-swap="outerHTML">
+  <span><span class="dot{{ ' dot-on' if schedule_enabled }}"></span>Scheduler {{ "on" if schedule_enabled else "off" }}</span>
+  {% if schedule_enabled and next_run %}<span>Next run {{ next_run|dt }} UTC</span>{% endif %}
+</div>
+<span id="nav-jobs-count" class="nav-count" hx-swap-oob="true"{% if not active_jobs %} hidden{% endif %}>{{ active_jobs or "" }}</span>

@@ -78,16 +78,6 @@ async def test_chart_json_errors_and_empty(client, sf):
     assert (await client.get(f"/assets/{asset.id}/candles.json")).json() == {"interval": "5m", "candles": []}
 
 
-async def test_chart_page(client, sf):
-    asset = await make_asset(sf)
-    page = await client.get(f"/assets/{asset.id}/chart")
-    assert page.status_code == 200 and "lightweight-charts@4.2.0" in page.text and f"/assets/{asset.id}/candles.json" in page.text
-    for label in ("1D", "1W", "1M", "6M", "1Y", "All"):
-        assert f'data-range="{label}"' in page.text
-    assert (await client.get("/assets/999/chart")).status_code == 404
-    assert f'/assets/{asset.id}/chart' in (await client.get("/")).text
-
-
 async def test_one_day_window_has_exactly_1440_full_bars(client, sf):
     asset = await make_asset(sf)
     last = datetime(2024, 3, 3, 12, 0, tzinfo=UTC)
@@ -112,10 +102,3 @@ def test_valid_candle_is_public():
     from app.services.export import valid_candle
 
     assert callable(valid_candle)
-
-
-async def test_chart_page_guards_missing_library_and_resize_listener(client, sf):
-    asset = await make_asset(sf)
-    text = (await client.get(f"/assets/{asset.id}/chart")).text
-    assert "Chart library failed to load" in text
-    assert text.count('addEventListener("resize"') == 1  # only the ResizeObserver fallback

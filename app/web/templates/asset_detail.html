@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% from "_macros.html" import alert %}
+{% from "_asset_parts.html" import status_region, details_card, export_card, jobs_card %}
+{% set page_title = asset.jesse_symbol %}{% set active_nav = "assets" %}
+{% block crumb %}<a class="crumb" href="/assets">Assets /</a>{% endblock %}
+{% block heading_extra %}{{ status_region(asset, row, active) }}{% endblock %}
+{% block actions %}
+<form class="inline" method="post" action="/assets/{{ asset.id }}/update"><input type="hidden" name="next" value="/assets/{{ asset.id }}"><button class="btn">{{ icon("refresh-cw") }}Update now</button></form>
+<a class="btn btn-danger" href="/assets/{{ asset.id }}/delete">{{ icon("trash-2") }}Delete</a>
+{% endblock %}
+{% block content %}
+<div class="detail-grid">
+  <div class="card" id="chart">
+    <div class="card-header">
+      <h2>Price</h2><span id="chart-status" class="chart-status"></span><span class="spacer"></span>
+      <div class="segmented" id="ranges" role="group" aria-label="Range">{% for r in ranges %}<button type="button" data-range="{{ r }}"{% if r == default_range %} class="active"{% endif %}>{{ r }}</button>{% endfor %}</div>
+    </div>
+    <div id="chart-canvas" class="chart"></div>
+  </div>
+  <div class="stack">
+    {{ details_card(asset, row) }}
+    {{ export_card(asset, rng) }}
+  </div>
+</div>
+<div class="detail-grid">
+  {{ jobs_card(history, now) }}
+  <div class="card" id="settings">
+    <div class="card-header"><h2>Settings</h2></div>
+    <form class="card-body stack-sm" method="post" action="/assets/{{ asset.id }}/edit">
+      {{ alert(error) }}
+      <div class="field">
+        <label for="jesse_symbol">Jesse symbol</label>
+        <input class="input" id="jesse_symbol" name="jesse_symbol" value="{{ form_symbol or asset.jesse_symbol }}" required>
+        <span class="hint">Use with exchange "Custom Data" when importing into Jesse.</span>
+      </div>
+      <label class="check"><input type="checkbox" name="enabled" {% if asset.enabled %}checked{% endif %}> Include in "Update all" and scheduled updates</label>
+      <p class="hint">Start date {{ asset.start_date|dt }} UTC (can't be changed).</p>
+      <div class="form-actions"><button class="btn btn-sm">Save</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/lightweight-charts-4.2.0.standalone.production.js"></script>
+<script>
+(function () {
+  var url = "/assets/{{ asset.id }}/candles.json";
+  var el = document.getElementById("chart-canvas"), status = document.getElementById("chart-status");
+  if (!window.LightweightCharts) {
+    status.textContent = "Chart library failed to load";
+    return;
+  }
+  function theme() {
+    var css = getComputedStyle(document.documentElement);
+    function v(name) { return css.getPropertyValue(name).trim(); }
+    return {
+      layout: { background: { type: "solid", color: v("--chart-bg") }, textColor: v("--chart-text"), fontFamily: "Inter, system-ui, sans-serif" },
+      grid: { vertLines: { color: v("--chart-grid") }, horzLines: { color: v("--chart-grid") } },
+      rightPriceScale: { borderColor: v("--chart-grid") },
+      timeScale: { borderColor: v("--chart-grid") }
+    };
+  }
+  var chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth, height: el.clientHeight, timeScale: { timeVisible: true, secondsVisible: false }
+  });
+  chart.applyOptions(theme());
+  var candles = chart.addCandlestickSeries({
+    upColor: "#26a69a", downColor: "#ef5350", wickUpColor: "#26a69a", wickDownColor: "#ef5350", borderVisible: false
+  });
+  var volume = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
+  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+  document.addEventListener("themechange", function () { chart.applyOptions(theme()); });
+  function fit() { chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }); }
+  if (window.ResizeObserver) { new ResizeObserver(fit).observe(el); } else { window.addEventListener("resize", fit); }
+
+  var token = 0;
+  function load(range) {
+    var mine = ++token;
+    status.textContent = "Loading…";
+    fetch(url + "?range=" + encodeURIComponent(range))
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (data) {
+        if (mine !== token) return;
+        candles.setData(data.candles);
+        volume.setData(data.candles.map(function (c) {
+          return { time: c.time, value: c.volume, color: c.close >= c.open ? "#26a69a66" : "#ef535066" };
+        }));
+        chart.timeScale().fitContent();
+        status.textContent = data.candles.length ? data.interval + " bars · " + data.candles.length.toLocaleString() : "No candles stored yet.";
+      })
+      .catch(function (e) { if (mine === token) status.textContent = "Failed to load: " + e.message; });
+  }
+  document.getElementById("ranges").addEventListener("click", function (ev) {
+    var b = ev.target.closest("button[data-range]");
+    if (!b) return;
+    document.querySelectorAll("#ranges button").forEach(function (x) { x.classList.toggle("active", x === b); });
+    load(b.dataset.range);
+  });
+  // When the download finishes, redraw with the new candles (the live poll refreshes the other cards).
+  var wasActive = {{ 'true' if active else 'false' }};
+  document.addEventListener("htmx:afterSwap", function (ev) {
+    if (ev.target.id !== "asset-status") return;
+    var active = ev.target.dataset.active === "true";
+    if (wasActive && !active) load(document.querySelector("#ranges button.active").dataset.range);
+    wasActive = active;
+  });
+  load("{{ default_range }}");
+})();
+</script>
+{% endblock %}

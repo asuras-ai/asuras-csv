@@ -1,21 +1,31 @@
-{% if error %}<p class="error">{{ error }}</p>
+{% from "_macros.html" import alert %}
+{% if error %}{{ alert(error) }}
 {% else %}
-<h3>{{ symbol }}</h3>
 <input type="hidden" name="provider" value="{{ provider }}">
 <input type="hidden" name="provider_symbol" value="{{ symbol }}">
-<label>Asset class
-  <select name="asset_class">
-    {% for c in asset_classes %}<option value="{{ c }}" {% if c == asset_class %}selected{% endif %}>{{ c }}</option>{% endfor %}
-  </select>
-</label>
-<label>Jesse symbol
-  <input name="jesse_symbol" value="{{ jesse_symbol }}" required pattern="[A-Z0-9]+-[A-Z0-9]+">
-  <small>Use this symbol with exchange "Custom Data" when importing into Jesse.</small>
-</label>
-<label>Start date
-  <input type="date" name="start_date" value="{{ earliest }}" min="{{ earliest }}" required
-         hx-get="/assets/estimate" hx-trigger="change" hx-target="#estimate" hx-include="[name=provider]">
-</label>
-<p id="estimate" class="muted">{{ estimate }}</p>
-<button type="submit">Add and start download</button>
+<div class="form-grid">
+  <div class="field full"><span class="label">Symbol</span><span class="sym">{{ symbol }}</span></div>
+  <div class="field">
+    <label for="jesse_symbol">Jesse symbol</label>
+    <input class="input" id="jesse_symbol" name="jesse_symbol" value="{{ jesse_symbol }}" required pattern="[A-Z0-9]+-[A-Z0-9]+">
+    <span class="hint">Use this symbol with exchange "Custom Data" when importing into Jesse.</span>
+  </div>
+  <div class="field">
+    <label for="asset_class">Asset class</label>
+    <select class="input" id="asset_class" name="asset_class">
+      {% for c in asset_classes %}<option value="{{ c }}" {% if c == asset_class %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="start_date">Start date</label>
+    <input class="input" type="date" id="start_date" name="start_date" value="{{ earliest }}" min="{{ earliest }}" required
+           hx-get="/assets/estimate" hx-trigger="change" hx-target="#estimate" hx-include="[name=provider]">
+    <span class="hint">Earliest available: {{ earliest }}</span>
+  </div>
+  <div class="field">
+    <span class="label">Estimate</span>
+    <p id="estimate" class="callout">{{ estimate }}</p>
+  </div>
+  <div class="form-actions full"><button type="submit" class="btn btn-primary">{{ icon("download") }}Add and start download</button></div>
+</div>
 {% endif %}

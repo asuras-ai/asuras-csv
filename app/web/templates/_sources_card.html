@@ -1,0 +1,13 @@
+<div class="card">
+  <div class="card-header"><h2>Data sources</h2><a class="card-link" href="/settings">Settings →</a></div>
+  {% for s in sources %}
+  <div class="list-row">
+    <span class="sym">{{ s.label }}</span><span class="muted small">{{ s.coverage }}</span>
+    {% if s.ready %}<span class="badge badge-success badge-dot">Ready</span>{% else %}<a class="badge badge-warning badge-dot" href="/settings">Key missing</a>{% endif %}
+  </div>
+  {% endfor %}
+  <div class="list-row">
+    <span class="sym">Scheduled updates</span><code>{{ settings.schedule_cron }}</code>
+    {% if settings.schedule_enabled %}<span class="badge badge-success badge-dot">On</span>{% else %}<span class="badge badge-dot">Off</span>{% endif %}
+  </div>
+</div>

@@ -1,0 +1,63 @@
+{# Pieces of the asset detail page that the /assets/{id}/live poll refreshes. #}
+{% from "_macros.html" import status_pill %}
+
+{% macro status_region(asset, row, active) -%}
+<span id="asset-status" class="status-region" data-active="{{ 'true' if active else 'false' }}" hx-get="/assets/{{ asset.id }}/live" hx-trigger="every {{ '2s' if active else '30s' }}" hx-swap="outerHTML">{{ status_pill(row.job, row.progress) }}</span>
+{%- endmacro %}
+
+{% macro details_card(asset, row, oob=False) -%}
+<div class="card" id="asset-details"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="card-header"><h2>Details</h2></div>
+  <dl class="kv">
+    <dt>Provider</dt><dd>{{ row.provider_label|short_label }} · {{ asset.provider_symbol }}</dd>
+    <dt>Class</dt><dd>{{ asset.asset_class }}</dd>
+    <dt>Stored</dt><dd>{% if row.stats.first %}{{ row.stats.first|dt }} → {{ row.stats.last|dt }}{% else %}—{% endif %}</dd>
+    <dt>Candles</dt><dd class="tabular">{{ row.stats.count|num }}</dd>
+    <dt>Fetched until</dt><dd>{{ asset.fetched_until|dt }}</dd>
+    <dt>Jesse</dt><dd>Custom Data · {{ asset.jesse_symbol }}</dd>
+  </dl>
+</div>
+{%- endmacro %}
+
+{% macro export_card(asset, rng, oob=False) -%}
+<div class="card" id="export"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="card-header"><h2>Export CSV</h2></div>
+  {% if rng is none %}
+  <div class="card-body muted">No candles stored yet.</div>
+  {% else %}
+  <form class="card-body stack-sm" method="get" action="/assets/{{ asset.id }}/export.csv">
+    <div class="form-grid">
+      <div class="field"><label for="exp-start">From</label><input class="input" id="exp-start" type="date" name="start" value="{{ rng.first.date().isoformat() }}"></div>
+      <div class="field"><label for="exp-end">To (inclusive)</label><input class="input" id="exp-end" type="date" name="end" value="{{ rng.last.date().isoformat() }}"></div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary btn-sm">{{ icon("download") }}Download CSV</button></div>
+  </form>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro jobs_card(history, now, oob=False) -%}
+<div class="card" id="asset-jobs"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <div class="card-header"><h2>Job history</h2><a class="card-link" href="/jobs">All jobs →</a></div>
+  <div class="card-scroll">
+    <table class="table">
+      <thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Range (UTC)</th><th class="num">Added</th><th>Run time</th><th>Finished</th></tr></thead>
+      <tbody>
+      {% for r in history %}
+        <tr>
+          <td class="muted">{{ r.job.id }}</td>
+          <td>{{ r.job.kind }}</td>
+          <td class="wrap">{{ status_pill(r.job, r.progress) }}</td>
+          <td>{{ r.job.range_start|dt }} → {{ r.job.range_end|dt }}</td>
+          <td class="num">{{ r.job.candles_added|num }}</td>
+          <td>{{ r.job.run_seconds|duration }}</td>
+          <td>{{ r.job.finished_at|ago(now) }}</td>
+        </tr>
+      {% else %}
+        <tr class="table-empty"><td colspan="7">No jobs yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{%- endmacro %}

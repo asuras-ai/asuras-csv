@@ -1,12 +1,27 @@
-{% macro job_status(job, progress) %}
-{% if job is none %}<span class="muted">idle</span>
-{% else %}
-  <strong>{{ job.status }}</strong>
-  {% if progress and job.status in ('queued', 'running', 'waiting', 'paused') %}
-    <br><progress value="{{ progress.percent }}" max="100"></progress> {{ progress.percent }}%
-    {% if progress.eta_seconds is not none %}· ~{{ progress.eta_seconds|duration }} left{% endif %}
-  {% endif %}
-  {% if job.status_detail %}<br><span class="muted">{{ job.status_detail }}</span>{% endif %}
-  {% if job.status == 'failed' and job.error %}<br><span class="error">{{ job.error }}</span>{% endif %}
-{% endif %}
-{% endmacro %}
+{# Shared UI components. Import what you need: {% from "_macros.html" import status_pill, kpi %} #}
+
+{% macro status_pill(job, progress) -%}
+{%- if job is none -%}
+<span class="badge cap">idle</span>
+{%- else -%}
+{%- set tone = {"queued": "info", "running": "info", "waiting": "warning", "paused": "warning", "done": "success", "failed": "danger"}.get(job.status, "") -%}
+<span class="badge badge-dot cap{{ ' badge-' ~ tone if tone }}">{{ job.status }}
+{%- if progress and job.status in ACTIVE_STATUSES %} <span class="progress" aria-hidden="true"><span style="width: {{ progress.percent }}%"></span></span> {{ progress.percent }}%{% endif -%}
+</span>
+{%- if progress and progress.eta_seconds is not none and job.status in ACTIVE_STATUSES %}<span class="status-detail">~{{ progress.eta_seconds|duration }} left</span>{% endif -%}
+{%- if job.status_detail %}<span class="status-detail">{{ job.status_detail }}</span>{% endif -%}
+{%- if job.status == "failed" and job.error %}<span class="status-error">{{ job.error }}</span>{% endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro kpi(label, value, sub="") -%}
+<div class="card kpi"><div class="kpi-label">{{ label }}</div><div class="kpi-value">{{ value }}</div>{% if sub %}<div class="kpi-sub">{{ sub }}</div>{% endif %}</div>
+{%- endmacro %}
+
+{% macro empty_state(icon_name, title, text, href=None, cta=None) -%}
+<div class="empty">{{ icon(icon_name) }}<h3>{{ title }}</h3><p>{{ text }}</p>{% if href %}<a class="btn btn-primary" href="{{ href }}">{{ icon("plus") }}{{ cta }}</a>{% endif %}</div>
+{%- endmacro %}
+
+{% macro alert(message) -%}
+{% if message %}<div class="alert alert-danger" role="alert">{{ icon("circle-alert") }}<span>{{ message }}</span></div>{% endif %}
+{%- endmacro %}

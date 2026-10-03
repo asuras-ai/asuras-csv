@@ -85,18 +85,19 @@ async def test_zip_duplicate_names_are_disambiguated(client, sf):
 
 async def test_assets_page_has_selection_checkboxes_that_survive_polling(client, sf):
     a = await make_asset(sf)
-    for url in ("/", "/assets/rows"):
+    for url in ("/assets", "/assets/rows"):
         html = (await client.get(url)).text
         assert f'name="ids" value="{a.id}"' in html and f'id="sel-{a.id}"' in html and "hx-preserve" in html
-    page = (await client.get("/")).text
+    page = (await client.get("/assets")).text
     assert 'id="zip-form"' in page and 'action="/export.zip"' in page and 'method="get"' in page
 
 
 async def test_zip_form_has_optional_date_inputs_and_empty_selection_guard(client, sf):
     await make_asset(sf)
-    page = (await client.get("/")).text
+    page = (await client.get("/assets")).text
     assert 'name="start"' in page and 'name="end"' in page
-    assert "Select at least one asset" in page  # inline JS guard message
+    script = (await client.get("/static/app.js")).text
+    assert 'ev.target.id === "zip-form"' in script and "preventDefault" in script  # empty-selection guard
 
 
 async def test_zip_temp_file_is_closed_by_a_background_task(client, sf, monkeypatch):
