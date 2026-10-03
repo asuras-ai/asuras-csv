@@ -93,7 +93,7 @@
     }
     closeMenus(t);
     var row = t.closest("tr[data-href]");
-    if (row && !t.closest("a, button, input, label, select, summary, details, form")) window.location.href = row.dataset.href;
+    if (row && !t.closest("a, button, input, label, select, summary, details, form, .select-cell")) window.location.href = row.dataset.href;
   });
   document.addEventListener("keydown", function (ev) {
     if (ev.key === "Escape") { closeMenus(null); document.body.classList.remove("sidebar-open"); }
@@ -111,6 +111,14 @@
   });
   document.addEventListener("submit", function (ev) {
     if (ev.target.id === "zip-form" && !document.querySelector('input[name="ids"]:checked')) ev.preventDefault();
+  });
+  // Browsers without moveBefore (Firefox, Safari) blur hx-preserve'd elements when the rows are swapped, so a
+  // keyboard user in a row checkbox or menu would lose focus every poll. Skip that swap; the next one catches up.
+  document.addEventListener("htmx:beforeSwap", function (ev) {
+    var focused = document.activeElement;
+    if (ev.detail.target.id === "asset-rows" && focused && ev.detail.target.contains(focused) && focused.matches(":focus-visible")) {
+      ev.detail.shouldSwap = false;
+    }
   });
   document.addEventListener("htmx:afterSwap", function () { applyFilters(); syncSelection(); });
   document.addEventListener("htmx:sendError", function () { setReconnecting(true); });

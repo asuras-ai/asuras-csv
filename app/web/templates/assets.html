@@ -15,7 +15,7 @@
     {% for p in providers %}<option value="{{ p.name }}">{{ p.label|short_label }}</option>{% endfor %}
   </select>
   <select class="input input-sm" data-filter="status" aria-label="Status">
-    <option value="">All statuses</option><option value="active">Active</option><option value="failed">Failed</option><option value="idle">Idle</option>
+    <option value="">All statuses</option><option value="active">Active</option><option value="failed">Failed</option><option value="done">Done</option><option value="idle">Idle</option>
   </select>
 </div>
 {# Row checkboxes attach to this form via form="zip-form"; app.js shows it while at least one is ticked. #}

@@ -1,0 +1,4 @@
+{# /jobs/rows response: the polled tbody plus the tab counts, swapped out of band. #}
+{% from "_macros.html" import job_tabs %}
+{% include "_jobs_tbody.html" %}
+{{ job_tabs(status, active_count, failed_count, oob=True) }}

@@ -1,11 +1,8 @@
 {% extends "base.html" %}
+{% from "_macros.html" import job_tabs %}
 {% set page_title = "Jobs" %}{% set active_nav = "jobs" %}
 {% block actions %}
-<nav class="segmented" aria-label="Filter jobs">
-  <a href="/jobs"{% if not status %} class="active"{% endif %}>All</a>
-  <a href="/jobs?status=active"{% if status == "active" %} class="active"{% endif %}>Active <span class="count">{{ active_count }}</span></a>
-  <a href="/jobs?status=failed"{% if status == "failed" %} class="active"{% endif %}>Failed <span class="count">{{ failed_count }}</span></a>
-</nav>
+{{ job_tabs(status, active_count, failed_count) }}
 {% endblock %}
 {% block content %}
 <div class="card card-scroll">
