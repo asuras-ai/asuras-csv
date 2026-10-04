@@ -152,28 +152,54 @@ async def create(
     return redirect(f"/assets/{asset.id}", notice=f"{asset.jesse_symbol} added, download queued")
 
 
+async def _assets_with_active_jobs(svc) -> set[int]:
+    latest = await jobs.latest_jobs_by_asset(svc.sf)
+    return {asset_id for asset_id, job in latest.items() if job.status in ACTIVE_STATUSES}
+
+
+def _update_notice(jobs_seen: list, already_active: set[int]) -> str:
+    """What an update request actually did: enqueue() returns the running job, or an instantly-done one."""
+    running = sum(1 for job in jobs_seen if job.asset_id in already_active)
+    up_to_date = sum(1 for job in jobs_seen if job.asset_id not in already_active and job.status == "done")
+    queued = len(jobs_seen) - running - up_to_date
+    parts = [f"Update queued for {_plural(queued, 'asset')}" if queued else "No updates queued"]
+    if running:
+        parts.append(f"{running} already running")
+    if up_to_date:
+        parts.append(f"{up_to_date} up to date")
+    return " · ".join(parts)
+
+
 @router.post("/assets/update-all")
 async def update_all(request: Request, next: Annotated[str, Form()] = "/"):
     svc = services(request)
+    already_active = await _assets_with_active_jobs(svc)
     try:
-        created = await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
+        seen = await jobs.enqueue_all(svc.sf, svc.registry, svc.clock)
     except ProviderError as exc:
         log.warning("update-all failed", exc_info=True)
         return redirect(safe_next(next, "/"), notice=f"Could not queue updates: {exc}")
-    return redirect(safe_next(next, "/"), notice=f"Update queued for {_plural(len(created), 'asset')}")
+    return redirect(safe_next(next, "/"), notice=_update_notice(seen, already_active))
 
 
-@router.post("/assets/{asset_id}/update")
+@router.post("/assets/{asset_id:int}/update")
 async def update_one(request: Request, asset_id: int, next: Annotated[str, Form()] = "/assets"):
     svc = services(request)
     asset = await asset_service.get_asset(svc.sf, asset_id)
     if asset is None:
         raise HTTPException(404, "Asset not found")
+    already_active = asset_id in await _assets_with_active_jobs(svc)
     try:
-        await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
+        job = await jobs.enqueue(svc.sf, svc.registry, svc.clock, asset_id, "update")
     except ProviderError as exc:
         return message_page(request, f"Cannot update this asset: {exc}", 400)
-    return redirect(safe_next(next, "/assets"), notice=f"Update queued for {asset.jesse_symbol}")
+    if already_active:
+        notice = f"{asset.jesse_symbol} is already updating"
+    elif job.status == "done":
+        notice = f"{asset.jesse_symbol} is already up to date"
+    else:
+        notice = f"Update queued for {asset.jesse_symbol}"
+    return redirect(safe_next(next, "/assets"), notice=notice)
 
 
 async def _asset_or_404(svc, asset_id: int) -> Asset:
@@ -223,22 +249,22 @@ async def _to_detail(request: Request, asset_id: int, anchor: str):
     return redirect(f"/assets/{asset_id}#{anchor}")
 
 
-@router.get("/assets/{asset_id}/chart")
+@router.get("/assets/{asset_id:int}/chart")
 async def chart_page(request: Request, asset_id: int):
     return await _to_detail(request, asset_id, "chart")
 
 
-@router.get("/assets/{asset_id}/export")
+@router.get("/assets/{asset_id:int}/export")
 async def export_page(request: Request, asset_id: int):
     return await _to_detail(request, asset_id, "export")
 
 
-@router.get("/assets/{asset_id}/edit")
+@router.get("/assets/{asset_id:int}/edit")
 async def edit_page(request: Request, asset_id: int):
     return await _to_detail(request, asset_id, "settings")
 
 
-@router.post("/assets/{asset_id}/edit")
+@router.post("/assets/{asset_id:int}/edit")
 async def edit(
     request: Request,
     asset_id: int,
@@ -254,7 +280,7 @@ async def edit(
     return redirect(f"/assets/{asset_id}", notice=f"Saved {jesse_symbol.strip()}")
 
 
-@router.get("/assets/{asset_id}/delete", response_class=HTMLResponse)
+@router.get("/assets/{asset_id:int}/delete", response_class=HTMLResponse)
 async def delete_page(request: Request, asset_id: int):
     svc = services(request)
     asset = await _asset_or_404(svc, asset_id)
@@ -262,7 +288,7 @@ async def delete_page(request: Request, asset_id: int):
     return templates.TemplateResponse(request, "asset_delete.html", {"asset": asset, "count": count})
 
 
-@router.post("/assets/{asset_id}/delete")
+@router.post("/assets/{asset_id:int}/delete")
 async def delete(request: Request, asset_id: int):
     svc = services(request)
     asset = await _asset_or_404(svc, asset_id)
@@ -280,7 +306,7 @@ def _parse_day(value: str | None) -> date | None:
         raise HTTPException(400, f"Invalid date: {value!r}") from None
 
 
-@router.get("/assets/{asset_id}/export.csv")
+@router.get("/assets/{asset_id:int}/export.csv")
 async def export_csv(request: Request, asset_id: int, start: str | None = None, end: str | None = None):
     svc = services(request)
     asset = await _asset_or_404(svc, asset_id)
@@ -296,7 +322,7 @@ async def export_csv(request: Request, asset_id: int, start: str | None = None, 
     )
 
 
-@router.get("/assets/{asset_id}/candles.json")
+@router.get("/assets/{asset_id:int}/candles.json")
 async def candles_json(request: Request, asset_id: int, range: Annotated[str, Query(pattern="^(1D|1W|1M|6M|1Y|All)$")] = DEFAULT_RANGE):
     svc = services(request)
     await _asset_or_404(svc, asset_id)
@@ -345,7 +371,7 @@ async def jobs_page(request: Request, status: JobFilter = None):
 
 @router.get("/jobs/rows", response_class=HTMLResponse)
 async def jobs_rows(request: Request, status: JobFilter = None):
-    return templates.TemplateResponse(request, "_jobs_tbody.html", await _jobs_context(services(request), status))
+    return templates.TemplateResponse(request, "_jobs_live.html", await _jobs_context(services(request), status))
 
 
 @router.post("/jobs/{job_id}/cancel")

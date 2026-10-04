@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.clock import Clock
 from app.config import EnvConfig
@@ -23,7 +24,7 @@ from app.state import Services
 from app.web import overview
 from app.web.routes import router
 from app.web.security import CrossSiteGuard
-from app.web.ui import STATIC_DIR, FlashCleaner
+from app.web.ui import STATIC_DIR, FlashCleaner, html_error_handler
 from app.worker import Worker
 
 log = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ def create_app(
     app.state.services = services
     app.add_middleware(CrossSiteGuard)
     app.add_middleware(FlashCleaner)
+    app.add_exception_handler(StarletteHTTPException, html_error_handler)
     app.include_router(overview.router)
     app.include_router(router)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

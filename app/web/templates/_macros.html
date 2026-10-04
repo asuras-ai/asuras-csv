@@ -25,3 +25,11 @@
 {% macro alert(message) -%}
 {% if message %}<div class="alert alert-danger" role="alert">{{ icon("circle-alert") }}<span>{{ message }}</span></div>{% endif %}
 {%- endmacro %}
+
+{% macro job_tabs(status, active_count, failed_count, oob=False) -%}
+<nav id="job-tabs" class="segmented"{% if oob %} hx-swap-oob="true"{% endif %} aria-label="Filter jobs">
+  <a href="/jobs"{% if not status %} class="active"{% endif %}>All</a>
+  <a href="/jobs?status=active"{% if status == "active" %} class="active"{% endif %}>Active <span class="count">{{ active_count }}</span></a>
+  <a href="/jobs?status=failed"{% if status == "failed" %} class="active"{% endif %}>Failed <span class="count">{{ failed_count }}</span></a>
+</nav>
+{%- endmacro %}

@@ -7,7 +7,9 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 
 from fastapi import Request
-from fastapi.responses import RedirectResponse
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import RedirectResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from starlette.datastructures import Headers, MutableHeaders
@@ -139,6 +141,19 @@ def _page_context(request: Request) -> dict:
         "static_version": STATIC_VERSION,
         "flash": unquote(raw)[:200] if raw else None,
     }
+
+
+_PAGE_ERRORS = {404: "Page not found.", 405: "This page doesn't accept that request."}
+
+
+async def html_error_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    """Browsers get 404/405 as the styled message page; API calls and htmx requests keep FastAPI's JSON errors."""
+    wants_page = "text/html" in request.headers.get("accept", "") and "hx-request" not in request.headers
+    if exc.status_code not in _PAGE_ERRORS or not wants_page:
+        return await http_exception_handler(request, exc)
+    generic = exc.detail in (None, "Not Found", "Method Not Allowed")
+    message = _PAGE_ERRORS[exc.status_code] if generic else str(exc.detail)
+    return templates.TemplateResponse(request, "message.html", {"message": message}, status_code=exc.status_code)
 
 
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"), context_processors=[_page_context])
