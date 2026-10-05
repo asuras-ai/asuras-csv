@@ -14,14 +14,14 @@
     <div class="card-header"><h2>Assets</h2><a class="card-link" href="/assets">View all {{ asset_total }} →</a></div>
     <div class="card-scroll">
       <table class="table">
-        <thead><tr><th>Symbol</th><th>Provider</th><th>History</th><th>Last 30 days</th><th>Last candle</th><th>Status</th></tr></thead>
+        <thead><tr><th>Symbol</th><th class="col-sm">Provider</th><th class="col-lg">History</th><th class="col-xs">Last 30 days</th><th>Last candle</th><th>Status</th></tr></thead>
         <tbody>
         {% for row in rows %}
           <tr data-href="/assets/{{ row.asset.id }}">
             <td><a class="sym" href="/assets/{{ row.asset.id }}">{{ row.asset.jesse_symbol }}</a></td>
-            <td>{{ row.provider_label|short_label }}</td>
-            <td class="muted">{% if row.stats.first %}{{ row.stats.first.date() }} → {{ row.stats.last.date() }}{% else %}—{% endif %}</td>
-            <td>{{ sparkline(sparks.get(row.asset.id, [])) }}</td>
+            <td class="col-sm">{{ row.provider_label|short_label }}</td>
+            <td class="muted col-lg">{% if row.stats.first %}{{ row.stats.first.date() }} → {{ row.stats.last.date() }}{% else %}—{% endif %}</td>
+            <td class="col-xs">{{ sparkline(sparks.get(row.asset.id, [])) }}</td>
             <td>{{ row.stats.last|ago(now) }}</td>
             <td class="wrap">{{ status_pill(row.job, row.progress) }}</td>
           </tr>
@@ -35,14 +35,14 @@
       <div class="card-header"><h2>Recent jobs</h2><a class="card-link" href="/jobs">All jobs →</a></div>
       <div class="card-scroll">
         <table class="table">
-          <thead><tr><th>Asset</th><th>Kind</th><th>Status</th><th class="num">Added</th><th>Finished</th></tr></thead>
+          <thead><tr><th>Asset</th><th class="col-sm">Kind</th><th>Status</th><th class="num col-sm">Added</th><th>Finished</th></tr></thead>
           <tbody>
           {% for r in recent %}
             <tr data-href="/assets/{{ r.asset.id }}">
               <td><a class="sym" href="/assets/{{ r.asset.id }}">{{ r.asset.jesse_symbol }}</a></td>
-              <td>{{ r.job.kind }}</td>
+              <td class="col-sm">{{ r.job.kind }}</td>
               <td class="wrap">{{ status_pill(r.job, r.progress) }}</td>
-              <td class="num">{{ r.job.candles_added|num }}</td>
+              <td class="num col-sm">{{ r.job.candles_added|num }}</td>
               <td>{{ r.job.finished_at|ago(now) }}</td>
             </tr>
           {% else %}

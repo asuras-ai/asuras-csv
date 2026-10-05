@@ -6,11 +6,11 @@
 <tr data-href="/assets/{{ a.id }}" data-symbol="{{ (a.jesse_symbol ~ ' ' ~ a.provider_symbol)|lower }}" data-provider="{{ a.provider }}" data-status="{{ group }}">
   <td class="select-cell"><label for="sel-{{ a.id }}"><input type="checkbox" id="sel-{{ a.id }}" name="ids" value="{{ a.id }}" form="zip-form" hx-preserve aria-label="Select {{ a.jesse_symbol }}"></label></td>
   <td><a class="sym" href="/assets/{{ a.id }}">{{ a.jesse_symbol }}</a>{% if not a.enabled %} <span class="badge">disabled</span>{% endif %}<span class="sub">{{ a.provider_symbol }}</span></td>
-  <td>{{ row.provider_label|short_label }}</td>
-  <td>{{ a.asset_class }}</td>
-  <td>{{ row.stats.first|dt }}</td>
-  <td>{{ row.stats.last|dt }}</td>
-  <td class="num">{{ row.stats.count|num }}</td>
+  <td class="col-lg">{{ row.provider_label|short_label }}</td>
+  <td class="col-xl">{{ a.asset_class }}</td>
+  <td class="col-xl">{{ row.stats.first|dt }}</td>
+  <td class="col-xs">{{ row.stats.last|dt }}</td>
+  <td class="num col-md">{{ row.stats.count|num }}</td>
   <td class="wrap">{{ status_pill(row.job, row.progress) }}</td>
   <td class="num">
     <details class="menu" id="menu-{{ a.id }}" hx-preserve>

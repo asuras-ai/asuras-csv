@@ -41,16 +41,16 @@
   <div class="card-header"><h2>Job history</h2><a class="card-link" href="/jobs">All jobs →</a></div>
   <div class="card-scroll">
     <table class="table">
-      <thead><tr><th>#</th><th>Kind</th><th>Status</th><th>Range (UTC)</th><th class="num">Added</th><th>Run time</th><th>Finished</th></tr></thead>
+      <thead><tr><th class="col-sm">#</th><th class="col-xs">Kind</th><th>Status</th><th class="col-xl">Range (UTC)</th><th class="num">Added</th><th class="col-sm">Run time</th><th>Finished</th></tr></thead>
       <tbody>
       {% for r in history %}
         <tr>
-          <td class="muted">{{ r.job.id }}</td>
-          <td>{{ r.job.kind }}</td>
+          <td class="muted col-sm">{{ r.job.id }}</td>
+          <td class="col-xs">{{ r.job.kind }}</td>
           <td class="wrap">{{ status_pill(r.job, r.progress) }}</td>
-          <td>{{ r.job.range_start|dt }} → {{ r.job.range_end|dt }}</td>
+          <td class="col-xl">{{ r.job.range_start|dt }} → {{ r.job.range_end|dt }}</td>
           <td class="num">{{ r.job.candles_added|num }}</td>
-          <td>{{ r.job.run_seconds|duration }}</td>
+          <td class="col-sm">{{ r.job.run_seconds|duration }}</td>
           <td>{{ r.job.finished_at|ago(now) }}</td>
         </tr>
       {% else %}

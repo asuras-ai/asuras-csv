@@ -3,16 +3,16 @@
 <tbody id="job-rows" hx-get="/jobs/rows{{ query }}" hx-trigger="every {{ '2s' if active else '30s' }}" hx-swap="outerHTML">
 {% for row in rows %}
   <tr>
-    <td class="muted">{{ row.job.id }}</td>
+    <td class="muted col-sm">{{ row.job.id }}</td>
     <td><a class="sym" href="/assets/{{ row.asset.id }}">{{ row.asset.jesse_symbol }}</a></td>
-    <td>{{ row.job.kind }}</td>
+    <td class="col-sm">{{ row.job.kind }}</td>
     <td class="wrap">{{ status_pill(row.job, row.progress) }}</td>
-    <td>{{ row.job.range_start|dt }} → {{ row.job.range_end|dt }}</td>
-    <td class="num">{{ row.job.requests_made|num }}</td>
-    <td class="num">{{ row.job.candles_added|num }}</td>
-    <td>{{ row.job.run_seconds|duration }}</td>
-    <td>{{ row.job.created_at|dt }}</td>
-    <td>{{ row.job.finished_at|dt }}</td>
+    <td class="col-xl">{{ row.job.range_start|dt }} → {{ row.job.range_end|dt }}</td>
+    <td class="num col-2xl">{{ row.job.requests_made|num }}</td>
+    <td class="num col-lg">{{ row.job.candles_added|num }}</td>
+    <td class="col-lg">{{ row.job.run_seconds|duration }}</td>
+    <td class="col-2xl">{{ row.job.created_at|dt }}</td>
+    <td class="col-xs">{{ row.job.finished_at|dt }}</td>
     <td class="num">
       {% if row.job.status in ACTIVE_STATUSES %}
       <form class="inline" method="post" action="/jobs/{{ row.job.id }}/cancel">
