@@ -118,7 +118,7 @@ code { font-family: var(--mono); font-size: 12px; padding: 0 4px; border: 1px so
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar { display: none; }
 .sidebar-backdrop { display: none; }
-.page-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 58px; padding: 12px 24px; border-bottom: 1px solid var(--border); }
+.page-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 58px; padding: 12px max(24px, calc(100% - 1376px)) 12px 24px; border-bottom: 1px solid var(--border); } /* right edge lines up with .page-body's 1400px cap on wide screens */
 .page-title { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; flex: 1; }
 .crumb { color: var(--text-muted); white-space: nowrap; }
 .page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -137,7 +137,7 @@ code { font-family: var(--mono); font-size: 12px; padding: 0 4px; border: 1px so
 .card-header p { margin-top: 2px; color: var(--text-muted); font-size: 11.5px; }
 .card-link { margin-left: auto; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .card-body { padding: 14px 16px; }
-.card-scroll { position: relative; overflow-x: auto; } /* relative: clips absolutely positioned children like .sr-only */
+.card-scroll { position: relative; overflow-x: auto; container-type: inline-size; } /* relative: clips absolutely positioned children like .sr-only */
 .step-num { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 600; }
 
 /* ---------- KPI ---------- */
@@ -162,6 +162,14 @@ code { font-family: var(--mono); font-size: 12px; padding: 0 4px; border: 1px so
 .table-empty td { padding: 28px 16px; color: var(--text-muted); text-align: center; }
 .table td.select-cell { padding: 0; }
 .select-cell > label { display: flex; align-items: center; padding: 9px 12px 9px 16px; cursor: pointer; }
+/* Low-priority columns drop out as their table's card narrows (container queries, so sidebar and grid placement don't matter). */
+@container (max-width: 1300px) { .col-2xl { display: none; } }
+@container (max-width: 1100px) { .col-xl { display: none; } }
+@container (max-width: 800px) { .col-lg { display: none; } }
+@container (max-width: 640px) { .col-md { display: none; } }
+@container (max-width: 500px) { .col-sm { display: none; } }
+@container (max-width: 420px) { .col-xs { display: none; } }
+@container (max-width: 800px) { .table .wrap { min-width: 0; } }
 .sym { color: var(--text-strong); font-weight: 500; }
 .sub { display: block; color: var(--text-muted); font-size: 11.5px; }
 
@@ -267,7 +275,7 @@ input.switch:checked::after { transform: translateX(14px); }
 .list-row { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--border-subtle); }
 .list-row:last-child { border-bottom: 0; }
 .list-row > .badge { margin-left: auto; }
-.chart { width: 100%; height: 420px; }
+.chart { width: 100%; height: 420px; overflow: hidden; } /* the canvas resizes a frame after its box; clip it so live window resizes never push the page wider */
 .chart-status { color: var(--text-muted); font-size: 11.5px; }
 .spark { display: block; }
 .spark polyline { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -300,6 +308,7 @@ input.switch:checked::after { transform: translateX(14px); }
   .chart { height: 320px; }
 }
 @media (max-width: 520px) {
+  .page-title { flex-basis: 100%; }
   .kpi-value { font-size: 20px; }
   .toast-region { left: 16px; right: 16px; }
   .toast { min-width: 0; }
